@@ -50,4 +50,6 @@ func init() {
 	rootCmd.AddCommand(newConnectCmd())
 	rootCmd.AddCommand(newTicketCmd())
 	rootCmd.AddCommand(newGetSTCmd())
+	rootCmd.AddCommand(NewDescribeCmd())
+	rootCmd.AddCommand(NewConvertCmd())
 }

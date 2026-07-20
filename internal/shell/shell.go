@@ -61,7 +61,7 @@ func (s *shell) runPiped(r io.Reader) int {
 		if len(args) == 0 {
 			continue
 		}
-		if code, done := s.dispatch(args); done {
+		if code, done := s.dispatch(sc.Text(), args); done {
 			return code
 		}
 	}
@@ -151,7 +151,7 @@ func (s *shell) runInteractive() int {
 			continue
 		}
 
-		code, done := s.dispatch(args)
+		code, done := s.dispatch(line, args)
 		if done {
 			return code
 		}
@@ -174,9 +174,17 @@ func (s *shell) prompt() string {
 }
 
 // dispatch executes one parsed command line. done=true ends the shell.
-func (s *shell) dispatch(args []string) (code int, done bool) {
+// line is the raw input; commands that forward text to the target (exec
+// family, wmiquery) use rawRest — the verbatim remainder after the command
+// word — because splitArgs strips quote characters that are data to the
+// remote side (e.g. WQL string literals).
+func (s *shell) dispatch(line string, args []string) (code int, done bool) {
 	cmd := strings.ToLower(args[0])
 	rest := args[1:]
+	rawRest := ""
+	if trimmed := strings.TrimSpace(line); len(trimmed) > len(args[0]) {
+		rawRest = strings.TrimSpace(trimmed[len(args[0]):])
+	}
 
 	switch cmd {
 	case "exit", "quit":
@@ -248,7 +256,31 @@ func (s *shell) dispatch(args []string) (code int, done bool) {
 	case "gpp":
 		s.cmdGPP()
 	case "exec":
-		s.cmdExec(rest)
+		s.cmdExec(rawRest)
+	case "psexec":
+		s.cmdPSExec(rawRest)
+	case "wmiexec":
+		s.cmdWMIExec(rawRest)
+	case "wmiquery":
+		s.cmdWMIQuery(rawRest)
+	case "dcomexec":
+		s.cmdDCOMExec(rawRest)
+	case "dacledit":
+		s.cmdDACLEdit(rest)
+	case "owneredit":
+		s.cmdOwnerEdit(rest)
+	case "sampasswd":
+		s.cmdSAMPassword(rest)
+	case "samadd":
+		s.cmdSAMGroup(true, rest)
+	case "samdel":
+		s.cmdSAMGroup(false, rest)
+	case "lookupsid":
+		s.cmdLookupSid(rest)
+	case "badsuccessor":
+		s.cmdBadSuccessor(rest)
+	case "raisechild":
+		s.cmdRaiseChild(rest)
 	default:
 		ui.Warm.Printf("  unknown command %q — try help\n", cmd)
 	}
@@ -294,6 +326,17 @@ func (s *shell) cmdHelp() {
 		{"rbcd get|set|clear ...", "read/set/clear RBCD on a computer (write: admin)"},
 		{"gpp", "find + decrypt GPP cpasswords in SYSVOL"},
 		{"exec <command...>", "run a command on the target via a scheduled task (admin; 15s output timeout)"},
+		{"psexec <command...>", "run a command as SYSTEM via a temporary service (admin; svcctl)"},
+		{"wmiexec <command...>", "run a command via WMI Win32_Process (admin; transient DCOM channel)"},
+		{"wmiquery <WQL>", "run a WQL query via WMI/DCOM (admin)"},
+		{"dcomexec <command...>", "run a command via DCOM objects (admin; often refused on hardened servers)"},
+		{"lookupsid [startRID] [endRID]", "brute-force account names by RID over LSA (default 500-4000)"},
+		{"dacledit <target> [-p user ...]", "read/grant/revoke DACL ACEs on an AD object (LDAP)"},
+		{"owneredit <target> [-set user]", "read or set an AD object's owner (LDAP)"},
+		{"sampasswd <user> <new> <old>", "change a user's password via SAMR (no LDAP; needs old password)"},
+		{"samadd|samdel <group> <user>", "add/remove a group member via SAMR"},
+		{"badsuccessor [enum|keys <dmsa$>]", "dMSA abuse (Server 2025 DCs; clean denial on older)"},
+		{"raisechild <child-krbtgt-hash> [out]", "forge EA golden ticket via SIDHistory (child domains only)"},
 		{"exit, quit", "close the session"},
 	}
 	for _, r := range rows {
@@ -557,13 +600,14 @@ func (s *shell) cmdSessions() {
 }
 
 // cmdExec runs a single command on the target via a scheduled task (TSCH).
-// Server-level op: needs no selected share.
-func (s *shell) cmdExec(args []string) {
-	if len(args) < 1 {
+// Server-level op: needs no selected share. cmdLine is the verbatim
+// remainder of the input line (see dispatch's rawRest).
+func (s *shell) cmdExec(cmdLine string) {
+	if cmdLine == "" {
 		fmt.Printf("  %s\n", ui.Muted.Sprint("usage: exec <command...>"))
 		return
 	}
-	out, warnings, err := s.sess.Exec(strings.Join(args, " "))
+	out, warnings, err := s.sess.Exec(cmdLine)
 	for _, w := range warnings {
 		ui.Warm.Printf("  warning: %s\n", w)
 	}

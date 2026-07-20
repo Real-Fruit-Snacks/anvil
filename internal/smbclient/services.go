@@ -8,8 +8,6 @@ import (
 
 	"github.com/mandiant/gopacket/pkg/dcerpc"
 	"github.com/mandiant/gopacket/pkg/dcerpc/svcctl"
-
-	"anvil/internal/ui"
 )
 
 // ServiceInfo is one Windows service from the Service Control Manager.
@@ -147,32 +145,26 @@ func enumServicesStatus(rpc *dcerpc.Client, handle []byte) ([]svcEntry, error) {
 	return nil, fmt.Errorf("EnumServicesStatusW: buffer still too small after retry")
 }
 
-// parseEnumResponse parses the REnumServicesStatusW response. Layout
-// (verified against a live Server 2022 response dump):
+// parseEnumResponse parses the REnumServicesStatusW response. The server
+// hand-packs lpServiceBuf, and the layout is implementation-defined — two
+// shapes exist in the wild:
 //
-//	[0:4]   referent for lpServiceBuf
-//	[4:8]   maxCount (array capacity, bytes)
-//	[8:12]  actualCount (bytes used)
-//	[12:..] array data: 36-byte entries, then the string pool
-//	end:    lpServicesReturned at [len-16], ReturnValue at [len-4]
-//	        (preceded by referents + resume handle)
+//	Windows: [referent(4)] then 36-byte records
+//	  [nameOff(4)][displayOff(4)][SERVICE_STATUS(28)] — the documented
+//	  ENUM_SERVICE_STATUSW field order, with offsets standing in for the
+//	  pointers. There is NO maxCount/actualCount header (what looks like
+//	  one is the first record's two offsets). The buffer may end with a
+//	  trailing record whose name/display offsets are null.
+//	Samba:   [referent(4)][maxCount(4)][actualCount(4)] then 36-byte
+//	  records [SERVICE_STATUS(28)][nameOff(4)][displayOff(4)].
 //
-// Each 36-byte entry is SERVICE_STATUS FIRST, then the two string offsets:
-//
-//	+0  serviceType  +4  currentState  +8  controlsAccepted  +12 win32Exit
-//	+16 specificExit +20 checkpoint    +24 waitHint         +28 nameOff
-//	+32 displayOff   (offsets relative to the array data start)
+// In both shapes string offsets are relative to resp+4, and the trailer
+// carries lpServicesReturned at [len-16] and ReturnValue at [len-4].
+// The layout is sniffed from the first record (windowsLayout).
 func parseEnumResponse(resp []byte) ([]svcEntry, bool, error) {
 	if len(resp) < 32 {
 		return nil, false, fmt.Errorf("EnumServicesStatusW response too short (len=%d)", len(resp))
 	}
-	actualCount := binary.LittleEndian.Uint32(resp[8:12])
-	arrayStart := 12
-	arrayEnd := arrayStart + int(actualCount)
-	if arrayEnd+16 > len(resp) {
-		return nil, false, fmt.Errorf("EnumServicesStatusW truncated (len=%d, arrayEnd=%d)", len(resp), arrayEnd)
-	}
-	data := resp[arrayStart:arrayEnd]
 
 	retVal := binary.LittleEndian.Uint32(resp[len(resp)-4:])
 	if retVal == errorMoreData {
@@ -182,10 +174,70 @@ func parseEnumResponse(resp []byte) ([]svcEntry, bool, error) {
 		return nil, false, fmt.Errorf("EnumServicesStatusW failed: 0x%08x", retVal)
 	}
 	servicesReturned := binary.LittleEndian.Uint32(resp[len(resp)-16:])
-	ui.Debugf("enum: len=%d actualCount=%d returned=%d retVal=0x%x", len(resp), actualCount, servicesReturned, retVal)
+	strings := resp[4:]
+
+	if windowsLayout(resp, strings) {
+		return parseWindowsRecords(resp, strings, servicesReturned)
+	}
+	return parseSambaRecords(resp, strings, servicesReturned)
+}
+
+// windowsLayout reports whether resp's first record starts with two string
+// offsets (Windows shape): the first dword then resolves to a printable
+// UTF-16 service name in the string pool. On the Samba shape that dword is
+// maxCount, which points into record bytes — never printable text.
+func windowsLayout(resp, strings []byte) bool {
+	nameOff := int(binary.LittleEndian.Uint32(resp[4:8]))
+	if nameOff <= 0 || nameOff >= len(strings) {
+		return false
+	}
+	name := utf16At(strings, nameOff)
+	for _, r := range name {
+		if r < 0x20 {
+			return false
+		}
+	}
+	return name != ""
+}
+
+// parseWindowsRecords walks the Windows shape: 36-byte records
+// [nameOff][displayOff][SERVICE_STATUS] starting at resp+4. Stops at the
+// trailing null-name sentinel or once servicesReturned names are collected.
+func parseWindowsRecords(resp, strings []byte, servicesReturned uint32) ([]svcEntry, bool, error) {
+	entries := make([]svcEntry, 0, servicesReturned)
+	for i := 0; ; i++ {
+		off := 4 + i*36
+		if off+36 > len(resp)-16 { // leave the out-params trailer
+			break
+		}
+		nameOff := binary.LittleEndian.Uint32(resp[off : off+4])
+		dispOff := binary.LittleEndian.Uint32(resp[off+4 : off+8])
+		if nameOff == 0 && dispOff == 0 {
+			break // trailing null-name sentinel (Server 2022)
+		}
+		entries = append(entries, svcEntry{
+			name:        utf16At(strings, int(nameOff)),
+			displayName: utf16At(strings, int(dispOff)),
+			state:       binary.LittleEndian.Uint32(resp[off+12 : off+16]),
+		})
+		if uint32(len(entries)) >= servicesReturned {
+			break
+		}
+	}
+	return entries, false, nil
+}
+
+// parseSambaRecords walks the Samba shape: a maxCount/actualCount header,
+// then 36-byte records [SERVICE_STATUS][nameOff][displayOff].
+func parseSambaRecords(resp, strings []byte, servicesReturned uint32) ([]svcEntry, bool, error) {
+	actualCount := binary.LittleEndian.Uint32(resp[8:12])
+	arrayEnd := 12 + int(actualCount)
+	if arrayEnd+16 > len(resp) {
+		return nil, false, fmt.Errorf("EnumServicesStatusW truncated (len=%d, arrayEnd=%d)", len(resp), arrayEnd)
+	}
+	data := resp[12:arrayEnd]
 
 	entries := make([]svcEntry, 0, servicesReturned)
-	strings := resp[4:] // string offsets are relative to the array (maxCount field)
 	for i := uint32(0); i < servicesReturned; i++ {
 		entryOff := int(i) * 36
 		if entryOff+36 > len(data) {

@@ -494,7 +494,7 @@ else
 	pass "delcomputer: ANVPC gone after delete"
 fi
 
-echo "== [14/14] anvil connect (null session) =="
+echo "== [14/15] anvil connect (null session) =="
 # Samba AD DC (default restrict anonymous = 0) ACCEPTS anonymous session
 # setup and even anonymous srvsvc share enumeration, but tree-connects to a
 # non-guest share are denied. Assert that reality: session establishes,
@@ -509,6 +509,50 @@ if [ "$NULL_RC" -eq 0 ] && ! grep -qi -e panic -e goroutine <<<"$NULL_OUT"; then
 else
 	fail "null session: unexpected rc=$NULL_RC or panic in output"
 fi
+
+echo "== [15/15] anvil connect (tier-1/2 features on Samba) =="
+# The tier-1/2 command set against the Samba lab. Samba reality here is
+# richer than expected: dacledit/owneredit/samadd/samdel/lookupsid WORK
+# (LDAP SD ops + SAMR aliases + LSARPC are implemented), while the exec
+# family and WMI/DCOM are cleanly refused (no ADMIN$, no DCOM/WMI, and
+# dMSA needs a 2025 schema). sampasswd fails on policy — NewPass#2026 is
+# in alice's history from section 11. All mutations are self-reverting
+# (grant+revoke, add+del). Assert that reality; verified against a real
+# Windows DC is where these features' success paths live.
+T12_OUT=$($ANVIL connect --host dc -u Administrator -p 'Lab!Admin#2026' -d LAB <<'EOF'
+psexec whoami
+wmiquery SELECT Name FROM Win32_Service
+wmiexec whoami
+dcomexec whoami
+dacledit alice -p alice -grant genericall
+dacledit alice -p alice -revoke
+owneredit alice
+samadd "Domain Guests" alice
+samdel "Domain Guests" alice
+sampasswd alice NewPass#2026 AlicePass#2026
+lookupsid 500 505
+badsuccessor enum
+raisechild 31d6cfe0d16ae931b73c59d7e0c089c0
+shares
+exit
+EOF
+)
+T12_RC=$?
+echo "$T12_OUT"
+[ "$T12_RC" -eq 0 ] && pass "tier1/2: session survives all new commands (exit 0)" || fail "tier1/2: session survives (got $T12_RC)"
+assert_fx "psexec: denied on Samba (no ADMIN\$)" "network name not found" "$T12_OUT"
+assert_fx "wmiquery: denied on Samba (no DCOM/WMI)" "not supported on this server" "$T12_OUT"
+assert_fx "wmiexec: denied on Samba" "not supported on this server" "$T12_OUT"
+assert_fx "dcomexec: denied on Samba" "network name not found" "$T12_OUT"
+assert_fx "dacledit: grant works on Samba" "added 1 ACE(s): alice gets genericall on alice" "$T12_OUT"
+assert_fx "dacledit: revoke works on Samba" "removed 1 ACE(s) for alice on alice" "$T12_OUT"
+assert_fx "owneredit: reads owner on Samba" "Domain Admins" "$T12_OUT"
+assert_fx "samadd: works on Samba" "alice added to Domain Guests" "$T12_OUT"
+assert_fx "samdel: works on Samba" "alice removed from Domain Guests" "$T12_OUT"
+assert_fx "sampasswd: policy rejection themed (history from section 11)" "password rejected by domain policy" "$T12_OUT"
+assert_fx "lookupsid: resolves lab RID 500" "LAB\\Administrator" "$T12_OUT"
+assert_fx "badsuccessor: clean no-schema denial" "no dMSA schema" "$T12_OUT"
+assert_fx "raisechild: clean single-domain refusal" "not a child domain" "$T12_OUT"
 
 END=$(date +%s)
 echo "== summary =="

@@ -96,8 +96,16 @@ below), `addcomputer <name> [-pass x]` / `delcomputer <name>` (create and
 delete machine accounts), `changepasswd <user> <new> [old]` (reset/change
 an AD user's password), `rbcd get|set|clear` (read/grant/clear
 Resource-Based Constrained Delegation on a computer), `gpp` (find and
-decrypt Group Policy Preferences cpasswords in SYSVOL), `exec <command...>`,
-`exit`/`quit`.
+decrypt Group Policy Preferences cpasswords in SYSVOL), `exec <command...>`
+(run a command via Task Scheduler), `psexec <command...>` (via a temporary
+Windows service), `wmiexec <command...>` / `wmiquery <WQL>` (via WMI/DCOM),
+`dcomexec <command...>` (via DCOM shell objects), `dacledit` / `owneredit`
+(read and edit AD object ACLs), `sampasswd <user> <new> <old>` (change a
+password via SAMR, no LDAP), `samadd` / `samdel <group> <user>` (edit group
+membership via SAMR), `lookupsid [startRID] [endRID]` (LSA SID brute-force
+enumeration), `badsuccessor [enum|keys <dmsa$>]` (dMSA abuse, Server 2025
+DCs), `raisechild <child-krbtgt-hash> [out]` (child→forest-root golden
+ticket via SIDHistory), `exit`/`quit`.
 
 `gpp` walks SYSVOL on the existing session for GPP XML files
 (Groups/Services/ScheduledTasks/DataSources/Printers/Drives and anything
@@ -112,6 +120,17 @@ descriptor: `rbcd get dc01$` lists who may impersonate users on a host,
 clearing needs write rights on the target's SD (typically Domain Admin);
 each op uses one transient LDAP channel. On Samba's lab DC the attribute
 is system-only, so writes are refused with a clean themed error.
+
+`dacledit` reads and edits any AD object's DACL over one transient LDAP
+channel — bare `dacledit <target>` lists ACEs (trustee, rights,
+inheritance, object type), `-p <user> -grant <rights>` adds an ACE, and
+`-p <user> -revoke [rights]` removes them. Rights presets cover the
+classic escalation primitives (`RightsPresetNames`: dcsync, fullcontrol,
+genericall, resetpassword, writedacl, writemembers, writeowner). Only the
+touched SD portion is written, and Server 2022's DACL canonicalization
+(GENERIC_ALL stored as FULL_CONTROL) is accounted for. `owneredit
+<target> [-set <user>]` reads or sets the object owner (write needs
+WriteOwner).
 
 ### The RBCD chain
 
@@ -134,6 +153,23 @@ the requesting account (`-u`/`-p` or `--hashes`), and the DNS realm (`-d`);
 `--dc-ip` overrides the KDC address. As with any `-k` connect, when DNS
 can't resolve the FQDN pass `--target-ip` as well. Denials are themed (no
 constrained-delegation rights vs. delegation not allowed).
+
+`badsuccessor` implements the BadSuccessor attack (CVE-2025-53779) against
+domains with a Windows Server 2025 DC: `badsuccessor enum` lists dMSA
+objects (migration state, superseded link, key-retrieval principals) over
+one transient LDAP channel, and `badsuccessor keys <dmsa$>` runs the
+KERB-SUPERSEDED path — a dMSA TGT whose PAC inherits the superseded
+account's privileges plus the KERB-DMSA-KEY-PACKAGE with the superseded
+account's keys. Request construction is byte-compatible with impacket's;
+on pre-2025 domains both modes cleanly report the missing dMSA schema.
+
+`raisechild <child-krbtgt-hash> [out.ccache]` is the child→forest-root
+escalation: a golden ticket forged in a child domain carrying the
+forest-root Enterprise Admins SID in its PAC SIDHistory (parent-child
+trusts pass it unfiltered). It verifies the connected domain really is a
+child (one transient LDAP channel), then forges offline. In a
+single-domain forest it says so and forges nothing. The follow-on
+cross-realm legs (TGS-REQ, parent dcsync) are not yet wired.
 
 `kerberoast` needs any authenticated domain user. It uses two transient
 channels (announced on screen): LDAP for the SPN lookup
@@ -171,6 +207,13 @@ session untouched. Bare `adenum` defaults to `users`. Four modes:
 - `laps` — hosts with a readable LAPS-managed local admin password
   (ms-Mcs-AdmPwd / msLAPS-Password) and its expiry
 
+`lookupsid [startRID] [endRID]` brute-forces account names by RID over the
+session's lsarpc pipe (MS-LSAT LsarLookupSids): resolves the domain SID,
+then sweeps the inclusive range (default 500–4000) in 64-SID batches,
+printing RID, `DOMAIN\name`, and SID type — every account, group, and
+machine in the domain in a fraction of a second against a Windows DC.
+Read-only; any authenticated session works.
+
 `addcomputer` creates the machine account over SAMR (existing session) and
 sets dNSHostName + kerberos SPNs over one transient LDAP channel
 (announced); without `-pass` a random 32-char password is generated and
@@ -190,6 +233,16 @@ verified against Windows Server 2022 — note a change counts as a *change*
 it. Rejections are themed by Win32 code: 00000056 means the old password
 was wrong, 0000052D means policy (complexity/history/minimum age) or an
 old-password mismatch.
+
+`sampasswd <user> <new> <old>` changes a password entirely over the SMB
+session (SamrUnicodeChangePasswordUser2) — no LDAP/LDAPS and no admin
+rights needed, so it works when 389/636 are filtered; it always needs the
+old password and enforces domain policy (including history), where the
+`changepasswd` admin reset bypasses it. (gopacket's SAMR admin reset —
+SetInformationUser level 18 — corrupts accounts on Server 2022, so it is
+deliberately not wired.) `samadd <group> <user>` / `samdel <group> <user>`
+edit membership of domain groups and Builtin aliases (e.g. Remote Desktop
+Users) via SAMR, also over the existing session.
 
 `dcsync` requires Domain Admins or Replicating Directory Changes rights.
 DRSUAPI has no SMB named-pipe endpoint, so it necessarily opens ONE extra
@@ -268,6 +321,21 @@ session; task and file are then deleted (verified, with warnings on
 leftovers). Caveats: requires a local admin on the target, is noisy in
 Windows event logs (task registration/run — 4698/4699), and waits at most
 15s for output.
+
+Four execution methods share the same readback-and-verified-cleanup
+pattern, so pick what the target allows: `exec` (TSCH, runs as SYSTEM),
+`psexec` (a temporary, uniquely-named Windows service over SVCCTL — runs
+as SYSTEM; the service runs a self-deleting batch because a service binary
+path cannot redirect output), `wmiexec` (`Win32_Process.Create` over one
+transient DCOM channel — runs as the connected user, quieter in logs), and
+`dcomexec` (ShellWindows → ShellBrowserWindow → MMC20 fallback). DCOM needs
+TCP/135 plus the dynamic RPC port range, and hardened servers refuse
+remote activation of the GUI-hosted classes (impacket behaves identically
+there) — anvil reports the per-object failure and points at the working
+alternative. All four take the remainder of the line verbatim, quotes
+included. `wmiquery <WQL>` runs WQL against `root\cimv2` over the same WMI
+channel and prints a table (e.g. `wmiquery SELECT Name, State FROM
+Win32_Service`).
 
 | flag | short | default | meaning |
 |---|---|---|---|
@@ -387,6 +455,19 @@ rejected.
 
 **For authorized security testing only** — a forged golden ticket grants
 persistent, full domain compromise on any domain you point it at.
+
+### `anvil describe` / `anvil convert`
+
+`anvil describe <file>` prints every ticket in a ccache or kirbi file
+(format sniffed by content, not extension): client, service, validity
+window (expired tickets flagged), session-key and ticket encryption types,
+and decoded flags. Fully offline; no keys needed.
+
+`anvil convert <in> <out>` converts between ccache and kirbi (KRB-CRED),
+direction detected from content. All tickets in the file are converted; a
+round-tripped ccache remains fully usable with `connect -k`. Conventions
+match impacket's ticketConverter (unencrypted KRB-CRED, auth time carried
+by start time).
 
 ## Test lab (Docker)
 

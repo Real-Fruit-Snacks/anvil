@@ -24,6 +24,7 @@ type Session struct {
 	smbSessionKey []byte               // kerberos path only (pkg/smb exposes it via GetSessionKey on NTLM)
 	host          string
 	port          int
+	targetIP      string // --target-ip override; extra channels (DCOM) must dial it, not host
 	share         string // currently selected share (pkg/smb keeps it unexported)
 	null          bool   // true when no credentials were supplied (null session)
 }
@@ -42,7 +43,7 @@ func Connect(host string, port int, targetIP string, creds *session.Credentials,
 		if err != nil {
 			return nil, err
 		}
-		return &Session{client: client, creds: creds, conn: conn, smbSessionKey: key, host: host, port: port}, nil
+		return &Session{client: client, creds: creds, conn: conn, smbSessionKey: key, host: host, port: port, targetIP: targetIP}, nil
 	}
 
 	dialHost := host
@@ -71,7 +72,7 @@ func Connect(host string, port int, targetIP string, creds *session.Credentials,
 		}
 	}
 
-	return &Session{client: client, creds: creds, host: host, port: port, null: nullSession}, nil
+	return &Session{client: client, creds: creds, host: host, port: port, targetIP: targetIP, null: nullSession}, nil
 }
 
 // Close tears down shares, session, and connection.

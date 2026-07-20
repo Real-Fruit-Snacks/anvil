@@ -1,0 +1,29 @@
+anvil — Active Directory recon/attack CLI
+==========================================
+
+anvil is built on Mandiant's gopacket and contains packet-construction
+code adapted from it:
+
+  gopacket (github.com/mandiant/gopacket)
+  Copyright (c) Mandiant
+  License: Apache License, Version 2.0
+  https://github.com/mandiant/gopacket
+
+  Adapted works (attributed in source comments):
+  - internal/scan/smb.go — SMB packet construction adapted from
+    gopacket tools/DumpNTLMInfo (Apache-2.0)
+  - internal/smbclient/*, internal/dpapi/*, internal/lsa/*,
+    internal/sam/*, internal/ntds/*, internal/dcsync/*, internal/roast/*,
+    internal/getst/*, internal/ticket/* — protocol flows mirrored from
+    gopacket tools/ (Apache-2.0), used via the gopacket Go module.
+
+Direct dependencies and their licenses:
+
+  github.com/mandiant/gopacket  — Apache-2.0
+  github.com/spf13/cobra        — Apache-2.0
+  github.com/fatih/color        — MIT
+  github.com/chzyer/readline    — MIT
+  golang.org/x/term             — BSD-3-Clause
+
+anvil itself is licensed under the Apache License, Version 2.0 (see
+LICENSE). For authorized security testing only.

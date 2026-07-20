@@ -1,0 +1,404 @@
+# anvil
+
+anvil is an Active Directory recon/attack CLI built on Mandiant's
+[gopacket](https://github.com/mandiant/gopacket) (Apache-2.0), a Go
+reimplementation of Impacket. SMB fingerprint packet construction is adapted
+from gopacket's `tools/DumpNTLMInfo` (Apache-2.0).
+
+**For authorized security testing only.**
+
+## Requirements
+
+- Go 1.25+
+- Pure Go, `CGO_ENABLED=0` — cross-compiles for Windows and Linux
+
+## Build
+
+```
+make build        # ./anvil
+go build ./cmd/anvil
+```
+
+Cross-compile both platforms into `dist/`:
+
+```
+make build-all    # dist/anvil-linux-amd64, dist/anvil-windows-amd64.exe
+```
+
+Other targets: `make test` (unit tests — hermetic, no lab needed), `make vet`,
+`make fmt`, `make clean`.
+
+### Windows version info
+
+Windows builds embed version info and an application manifest (from
+`versioninfo.json` / `anvil.manifest`) via the pinned
+`goversioninfo` tool (`go get -tool` in go.mod, run as
+`go tool goversioninfo`). `make windows-resource` regenerates
+`cmd/anvil/resource_windows_amd64.syso`; `make build-windows` and
+`make build-all` do it automatically. The `_windows_amd64` suffix means only
+windows/amd64 builds link the resource.
+
+## Usage
+
+```
+anvil scan <target> [flags]
+```
+
+`scan` profiles a target without credentials: TCP reachability of the AD port
+set (dns, kerberos, msrpc, ldap, smb, ldaps, gc, rdp, winrm, ...), then
+unauthenticated probes against open ports — SMB dialect/signing/OS/NTLM
+fingerprint, RPC endpoint mapper dump, and LDAP posture (signing requirement,
+LDAPS channel binding, root DSE).
+
+Flags:
+
+- `--ports 53,88,445` — comma-separated TCP ports (default: AD port set)
+- `--timeout 3s` — per-connection timeout
+- `--json` — machine-readable output, no color
+
+Examples:
+
+```
+anvil scan 192.168.10.5
+anvil scan dc01.corp.local --timeout 5s
+anvil scan 192.168.10.5 --ports 88,389,445,636 --json
+```
+
+### `anvil connect`
+
+```
+anvil connect --host <ip|hostname> [flags]
+```
+
+Opens an authenticated SMB session and drops into an interactive shell —
+one connection stays open for the whole session. Shell commands: `help`,
+`shares` (with per-share access, see below), `use <share>`, `ls [path]`,
+`cd <path>`, `pwd`, `get <remote> [local]`, `put <local> [remote]`,
+`rm <path>`, `mkdir <path>`,
+`rmdir <path>`, `rename <old> <new>`, `cat <path>` (files up to 8 MiB;
+use `get` for larger), `sessions` (active sessions via srvsvc
+NetrSessionEnum), `users` (domain users via SAMR), `groups` (domain
+groups via SAMR), `members <group>` (members of a domain group),
+`services` (Windows services via SVCCTL, admin on the target required),
+`loggedon` (interactively logged-on users via wkssvc NetrWkstaUserEnum),
+`reg query <HIVE\path> [/v name]` (remote registry read via WINREG),
+`reg save <HIVE\path> <remote-file>` (export a key/hive to a file on the
+target via BaseRegSaveKey), `samdump` (extract local account NT/LM hashes,
+secretsdump-style), `lsadump` (extract LSA secrets + cached domain logons /
+MSCashV2), `dcsync` (replicate domain user hashes from NTDS via DRSUAPI),
+`ntdsdump` (offline domain hash dump from NTDS.dit via VSS shadow copy),
+`dpapi` (decrypt Credential Manager secrets with LSA masterkeys),
+`kerberoast` (request crackable RC4 service tickets for SPN users),
+`asrep` (request crackable AS-REPs for users with "Do not require Kerberos
+preauthentication" set),
+`adenum [users|computers|delegation|laps]` (AD enumeration via LDAP, see
+below), `addcomputer <name> [-pass x]` / `delcomputer <name>` (create and
+delete machine accounts), `changepasswd <user> <new> [old]` (reset/change
+an AD user's password), `rbcd get|set|clear` (read/grant/clear
+Resource-Based Constrained Delegation on a computer), `gpp` (find and
+decrypt Group Policy Preferences cpasswords in SYSVOL), `exec <command...>`,
+`exit`/`quit`.
+
+`gpp` walks SYSVOL on the existing session for GPP XML files
+(Groups/Services/ScheduledTasks/DataSources/Printers/Drives and anything
+else carrying `cpassword`), extracts each `cpassword` and its `userName`,
+and decrypts with Microsoft's published AES-256 key (zero IV, PKCS7).
+Output is USERNAME / SECRET / SOURCE rows; undecryptable blobs are warm
+warnings.
+
+`rbcd` edits the `msDS-AllowedToActOnBehalfOfOtherIdentity` security
+descriptor: `rbcd get dc01$` lists who may impersonate users on a host,
+`rbcd set dc01$ ANVPC$` grants it, `rbcd clear dc01$` wipes it. Setting or
+clearing needs write rights on the target's SD (typically Domain Admin);
+each op uses one transient LDAP channel. On Samba's lab DC the attribute
+is system-only, so writes are refused with a clean themed error.
+
+### The RBCD chain
+
+`anvil getst` completes the chain — S4U2Self + S4U2Proxy service-ticket
+request as an allowed account, written as a ccache for `connect -k`:
+
+```
+anvil connect --host dc01.corp.local -u admin -p 'pw' -d CORP
+  addcomputer ANVX -pass 'Str0ng!PC#2026'   # machine account
+  rbcd set DC01$ ANVX$                      # ANVX$ may impersonate on DC01
+  exit
+anvil getst -spn cifs/dc01.corp.local -impersonate Administrator \
+  -u 'ANVX$' -p 'Str0ng!PC#2026' -d corp.local
+KRB5CCNAME=Administrator@cifs_dc01.corp.local.ccache \
+  anvil connect -k --host dc01.corp.local
+```
+
+`getst` needs the SPN (`-spn`), the user to impersonate (`-impersonate`),
+the requesting account (`-u`/`-p` or `--hashes`), and the DNS realm (`-d`);
+`--dc-ip` overrides the KDC address. Denials are themed (no
+constrained-delegation rights vs. delegation not allowed).
+
+`kerberoast` needs any authenticated domain user. It uses two transient
+channels (announced on screen): LDAP for the SPN lookup
+(`(&(objectCategory=person)(objectClass=user)(servicePrincipalName=*))`),
+and the KDC for one RC4 TGS per SPN — hashes print in hashcat format
+(`$krb5tgs$23$*user$realm$spn*$checksum$data`). The LDAP channel uses a
+simple bind over 389 (allowed by default on Windows DCs; pass-the-hash
+uses an NTLM bind instead).
+
+`asrep` (AS-REP roasting) needs any authenticated domain user for the LDAP
+lookup. It uses the same two transient channels (announced on screen):
+LDAP to find users with DONT_REQ_PREAUTH set
+(`(&(objectCategory=person)(objectClass=user)(userAccountControl:1.2.840.113556.1.4.803:=4194304))`),
+and the KDC for one RC4 AS-REQ per user — no credentials needed for the
+KDC half, since the KDC answers AS-REQs for these accounts without
+pre-authentication. Hashes print in hashcat format
+(`$krb5asrep$23$user@REALM:checksum$data`).
+
+`adenum` enumerates the domain over LDAP. It needs any authenticated domain
+user (a DA for `laps` — LAPS passwords are only readable by privileged
+accounts) and uses one transient LDAP channel per invocation (announced on
+screen; same simple-bind pattern as the roast commands), leaving the SMB
+session untouched. Bare `adenum` defaults to `users`. Four modes:
+
+- `users` — domain users with display name, adminCount, and the
+  pwdLastSet / lastLogon timestamps (adminCount=1 flags accounts with
+  protected-group privilege; lastLogon is not replicated, so it reflects
+  this DC only)
+- `computers` — computer accounts with DNS host name and OS version
+- `delegation` — delegation relationships: unconstrained (UAC
+  TRUSTED_FOR_DELEGATION, highlighted — the trusted host receives any
+  user's TGT), constrained (msDS-AllowedToDelegateTo, with or without
+  protocol transition), and resource-based
+  (msDS-AllowedToActOnBehalfOfOtherIdentity)
+- `laps` — hosts with a readable LAPS-managed local admin password
+  (ms-Mcs-AdmPwd / msLAPS-Password) and its expiry
+
+`addcomputer` creates the machine account over SAMR (existing session) and
+sets dNSHostName + kerberos SPNs over one transient LDAP channel
+(announced); without `-pass` a random 32-char password is generated and
+printed once. Any authenticated user can typically create up to 10 machine
+accounts (MS-DS-Machine-Account-Quota; Samba's lab DC denies non-admin
+creation by default). `delcomputer` deletes the computer object via LDAP
+(admin required).
+
+`changepasswd <user> <new> [old]` writes the `unicodePwd` attribute over
+one transient LDAPS channel (announced; falls back to plain LDAP when the
+TLS handshake fails — e.g. Samba certs Go's x509 parser rejects). With two
+arguments it is an admin reset (replace the password outright, needs reset
+rights); with the old password given it is a user change (delete old + add
+new in one modify request, per MS-ADTS 3.1.1.3.1.5). Policy violations
+(0000052D) and rights failures are reported with the underlying LDAP
+result.
+
+`dcsync` requires Domain Admins or Replicating Directory Changes rights.
+DRSUAPI has no SMB named-pipe endpoint, so it necessarily opens ONE extra
+RPC-over-TCP channel (epmapper lookup + dynamic port, opened and closed
+once per invocation — announced on screen) while the SMB session stays
+untouched. Output is secretsdump format: `DOMAIN\user:RID:lm:nt:::`.
+
+`samdump` requires admin on the target. It saves the SAM and SYSTEM hives
+on the target (`C:\Windows\Temp\anv-*.tmp`), downloads them over the same
+session, parses and decrypts **locally** (bootkey + RC4/DES via gopacket's
+pkg/registry), prints `user:RID:lm:nt:::` lines to stdout, then deletes
+the remote files and the local temp dir — hives never persist and any
+undeleted leftover is named in a warning. `lsadump` does the same with the
+SECURITY hive (plus SYSTEM for the bootkey), printing cached logons as
+`DOMAIN/user:hash` and secrets in secretsdump format.
+
+`ntdsdump` requires admin on a domain controller. It creates a VSS shadow
+copy of `C:` (`vssadmin create shadow /for=C:` via `exec` as SYSTEM, with a
+`wmic shadowcopy call create` fallback), copies `ntds.dit` and the SYSTEM
+hive out of the shadow into `C:\Windows\Temp\anv-*.tmp`, downloads them
+over the same session, and parses and decrypts **locally** (bootkey from
+SYSTEM, then the PEK and the per-user NT/LM hashes from the ESE database
+via gopacket's pkg/ese + pkg/registry), printing secretsdump-format
+`DOMAIN\user:RID:lm:nt:::` lines. The shadow copy (verified via
+`vssadmin list shadows`), the remote temp files, and the local temp dir are
+all deleted afterwards — any leftover is named in a warning. The domain
+prefix comes from the session's `-d` domain, falling back to the NTLM
+challenge's DNS tree name; the NTDS.dit path is the default
+`C:\Windows\NTDS\ntds.dit`.
+
+`dpapi` requires admin on the target. It reuses the lsadump flow (save +
+download + delete the SECURITY and SYSTEM hives) to recover the
+DPAPI_SYSTEM machine/user masterkeys, then fetches every blob under
+`C$\Users\*\AppData\{Roaming,Local}\Microsoft\Credentials` over the same
+session and decrypts locally (blob parsing via gopacket's pkg/dpapi; the
+decryption itself lives in anvil's internal/dpapi). Output is aligned
+TARGET / USERNAME / SECRET rows; blobs that fail to decrypt are warm
+warnings, not errors. Regular interactive users' blobs are covered too:
+masterkey files that DPAPI_SYSTEM can't open are retried with keys derived
+from the session's own credentials (the connected user's password, or NT
+hash with pass-the-hash), so dumping as alice recovers alice's own
+Credential Manager secrets; kerberos-only sessions carry no password/hash
+and get only the DPAPI_SYSTEM-covered blobs.
+
+`reg save` writes on the **target's** filesystem (absolute Windows path
+required, e.g. `reg save HKLM\SAM C:\Windows\Temp\sam.save`); download the
+file afterwards with `use C$` + `get Windows\Temp\sam.save`. Saving SAM,
+SECURITY, or full hives needs admin with backup privilege on the target.
+
+Example: `reg query HKLM\SOFTWARE\Microsoft` lists subkeys and values;
+`reg query HKLM\SYSTEM\CurrentControlSet\Control /v CurrentVersion` reads
+one value with type and data (SZ/MULTI_SZ/DWORD/QWORD rendered as text,
+BINARY as capped hex). HKCC is not supported (no `OpenCurrentConfig` in
+gopacket's winreg).
+
+`shares` shows smbmap-style access per share: tree connect + directory read
+for READ, and a WRITE probe that briefly creates and deletes a tiny
+uniquely-named file (`anv-<rand>.tmp`) at the share root (like smbmap).
+Probing never changes the currently selected share.
+
+`exec` runs a single command on the target via a temporary scheduled task
+(TSCH, atexec-style): the task `anv-<rand>` runs `cmd.exe /C <cmd>` with
+output redirected to `%windir%\Temp`, which is read back over the same
+session; task and file are then deleted (verified, with warnings on
+leftovers). Caveats: requires a local admin on the target, is noisy in
+Windows event logs (task registration/run — 4698/4699), and waits at most
+15s for output.
+
+| flag | short | default | meaning |
+|---|---|---|---|
+| `--host` | | (required) | target IP or hostname |
+| `--port` | | `445` | SMB port |
+| `--user` | `-u` | | username |
+| `--password` | `-p` | | password (hidden prompt if `-u` given without `-p`) |
+| `--domain` | `-d` | | domain |
+| `--hashes` | | | `LMHASH:NTHASH` pass-the-hash |
+| `--kerberos` | `-k` | | kerberos via ccache (`KRB5CCNAME` or `<user>.ccache`) |
+| `--target-ip` | | | connect via this IP while keeping `--host` as the SPN name |
+| `--dc-ip` | | | KDC address override for kerberos |
+| `--dc-host` | | | DC hostname override for kerberos |
+
+No credentials at all attempts a null session. The persistent `--timeout`
+flag applies.
+
+### Kerberos
+
+Mint a TGT first — `getTGT` (gopacket) or `kinit` — then point anvil at
+the ccache. The realm must be DNS-form (`LAB.LOCAL`, not NetBIOS); when a
+ccache is present its realm drives the exchange, otherwise `--domain` is
+the fallback. `--host` must be the FQDN (the SPN is `cifs/<host>`); use
+`--target-ip` when DNS can't resolve it:
+
+```
+KRB5CCNAME=/tmp/alice.ccache anvil connect --host dc01.lab.local -k -u alice -d LAB.LOCAL
+anvil connect --host dc01.lab.local --target-ip 10.0.0.5 -k -u alice -d LAB.LOCAL
+```
+
+Kerberos sessions negotiate SMB 3.0.2 (the smb2 library's 3.1.1 preauth
+hash mishandles the kerberos immediate-auth leg — pinning keeps signing
+correct on all servers).
+
+Examples:
+
+```
+anvil connect --host 192.168.10.5 -u alice -p 's3cret' -d CORP
+anvil connect --host dc01.corp.local -u alice            # password prompt
+anvil connect --host 192.168.10.5 --hashes aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0
+```
+
+Scripted (non-interactive) use works by piping commands on stdin:
+
+```
+printf 'use ANVIL\nls\nexit\n' | anvil connect --host 192.168.10.5 -u alice -p 's3cret'
+```
+
+Color output follows the NO_COLOR convention and is disabled automatically
+when output is not a terminal. Colors come from the
+[Terminal Workbench](https://github.com/Real-Fruit-Snacks/terminal-workbench-design-system)
+design system: the dark palette is the default, and the light palette is
+selected when `ANVIL_THEME=light` or when `COLORFGBG` reports a light
+background (7 or 15). `ANVIL_THEME=dark` forces the dark palette.
+
+### `anvil ticket`
+
+```
+anvil ticket -krbtgt <nthash> -domain <dns-domain> -domain-sid <S-1-5-21-...> -user <username> [-out path]
+anvil ticket -nthash <nthash> -spn <service/fqdn> -domain <dns-domain> -domain-sid <S-1-5-21-...> -user <username> [-out path]
+```
+
+Forges a **golden ticket** — a TGT for any user, signed and encrypted with
+the domain's krbtgt key. A KDC trusts any TGT encrypted with its own
+krbtgt key, so whoever holds that key can mint valid tickets for arbitrary
+users without ever talking to the KDC; forging is fully offline. The
+krbtgt NT hash comes from `dcsync` (the `krbtgt` account's NT hash), and
+the domain SID from standard domain enumeration. The forged PAC carries
+the default high-privilege group set (Domain Admins, Enterprise Admins,
+Schema Admins, ...) and a ~10-year lifetime, matching impacket's ticketer
+defaults.
+
+With `-nthash` + `-spn` instead of `-krbtgt`, anvil forges a **silver
+ticket**: a service ticket for one SPN, encrypted with that machine or
+service account's NT hash (e.g. the `dc01$` machine account hash from
+`dcsync`). Where a golden ticket is a skeleton key — one TGT the KDC will
+exchange for any service — a silver ticket opens exactly one service on
+one host, and the KDC is never involved at all: no AS-REQ, no TGS-REQ,
+nothing logged on the DC. The trade-off is scope (one SPN, and only
+services that validate the PAC against their own key) and exposure (the
+service's own event logs still see the logon). Exactly one of
+`-krbtgt`/`-nthash` is required, and `-spn` (`cifs/dc01.lab.local`,
+`http/web.corp.local`, ...) is required with `-nthash` and rejected with
+`-krbtgt`.
+
+The ticket is written as a ccache — default `<user>.ccache` in the current
+directory, or `-out <path>` — and consumed exactly like a real TGT (see
+Kerberos above):
+
+```
+$ anvil ticket -krbtgt 31d6cfe0d16ae931b73c59d7e0c089c0 -domain lab.local \
+    -domain-sid S-1-5-21-1004336348-1177238915-682003330 -user Administrator
+GOLDEN TICKET  Administrator@LAB.LOCAL
+  ccache         Administrator.ccache
+use: KRB5CCNAME=Administrator.ccache anvil connect -k -u Administrator -d LAB.LOCAL --host <fqdn>
+
+$ anvil ticket -nthash 31d6cfe0d16ae931b73c59d7e0c089c0 -spn cifs/dc01.lab.local \
+    -domain lab.local -domain-sid S-1-5-21-1004336348-1177238915-682003330 -user Administrator
+SILVER TICKET  Administrator@LAB.LOCAL -> cifs/dc01.lab.local
+  ccache         Administrator.ccache
+use: KRB5CCNAME=Administrator.ccache anvil connect -k -u Administrator -d LAB.LOCAL --host dc01.lab.local
+
+$ KRB5CCNAME=Administrator.ccache anvil connect --host dc01.lab.local -k -u Administrator -d LAB.LOCAL
+```
+
+`-krbtgt`/`-nthash` want the 32-hex-char NT hash (an `LMHASH:NTHASH` pair
+is accepted too, the NT half is used). `-domain-sid` is the domain SID
+proper (`S-1-5-21-<a>-<b>-<c>`) — a user SID with a trailing RID is
+rejected.
+
+**For authorized security testing only** — a forged golden ticket grants
+persistent, full domain compromise on any domain you point it at.
+
+## Test lab (Docker)
+
+A self-contained Samba AD DC (`dc01.lab.local`, realm `LAB.LOCAL`) runs in
+Docker as an independent test target for `anvil scan` and `anvil connect`.
+It is **Samba, not Windows Server** — protocol behavior and defaults differ
+from real AD in places (e.g. anonymous session setup is allowed by default),
+so treat it as a smoke-test target, not a fidelity reference.
+
+Requires Docker Desktop with Linux containers. From Git Bash you may need
+Docker's bin dir on PATH first:
+
+```
+export PATH="$PATH:/c/Program Files/Docker/Docker/resources/bin"
+```
+
+Usage:
+
+```
+make env-up      # build image (first run) + start dc, provision domain
+make e2e         # build dist/anvil-linux-amd64, run the assertion suite
+make env-logs    # follow dc logs
+make env-down    # stop and wipe all volumes (fresh provision next time)
+```
+
+What `make e2e` covers (assertions in `testenv/scripts/e2e.sh`): port scan
+of the AD set, SMB dialect/signing fingerprint, LDAP root DSE naming context,
+RPC endpoint dump, DC hint; `connect` with alice's password (share list,
+ls/cd/pwd, `get` round-trips incl. a `..\hello.txt` parent path, `put`
+verified from the runner side); pass-the-hash with alice's NT hash; null
+session handling. Lab credentials: `LAB\alice` / `AlicePass#2026`, admin
+`Lab!Admin#2026`; share `LABSHARE` with seeded files.
+
+The DC also publishes SMB/LDAP on host ports `4445`/`4389` for manual
+poking, e.g. `anvil connect --host 127.0.0.1 --port 4445 -u alice -p
+'AlicePass#2026' -d LAB`. (`anvil scan` probes fixed service ports, so
+scan the lab from inside Docker — that's what `make e2e` does.)

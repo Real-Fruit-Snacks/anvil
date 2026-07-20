@@ -1,0 +1,5 @@
+/anvil
+/anvil.exe
+/dist/
+*.syso
+testenv/bin/

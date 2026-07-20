@@ -1,0 +1,46 @@
+services:
+  dc:
+    build: ./testenv/dc
+    hostname: dc01
+    # samba-tool provision writes security.NTACL xattrs on sysvol; the
+    # security.* xattr namespace requires CAP_SYS_ADMIN in the container.
+    cap_add:
+      - SYS_ADMIN
+    networks:
+      lab:
+        aliases:
+          - dc
+    volumes:
+      - samba-state:/var/lib/samba
+      - samba-etc:/etc/samba
+      - labshare:/srv/labshare
+      - labstate:/state
+    ports:
+      # host 445 is taken by Windows; map for manual poking only
+      - "4445:445"
+      - "4389:389"
+
+  runner:
+    image: debian:bookworm-slim
+    profiles:
+      - e2e
+    depends_on:
+      - dc
+    networks:
+      - lab
+    volumes:
+      - ./dist:/opt/anvil:ro
+      - ./testenv/scripts:/opt/scripts:ro
+      - ./testenv/bin:/opt/bin:ro
+      - labshare:/verify:ro
+      - labstate:/state:ro
+    command: ["/bin/bash", "/opt/scripts/e2e.sh"]
+
+networks:
+  lab:
+
+volumes:
+  samba-state:
+  samba-etc:
+  labshare:
+  labstate:

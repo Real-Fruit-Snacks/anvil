@@ -81,15 +81,31 @@ func resolveUserDN(cl *ldap.Client, baseDN, sam string) (string, error) {
 }
 
 // mapPasswordError translates common LDAP password-write failures into
-// actionable messages.
+// actionable messages. Windows LDAP error text can carry embedded NUL and
+// other control bytes (observed on Server 2022) — strip them before the
+// message reaches the terminal. Note that a change-with-old reports BOTH a
+// policy violation (0000052D: complexity/history/minimum age) and an
+// incorrect old password (00000056) as "Constraint Violation", so the
+// Win32 code, not the result-code name, decides the hint.
 func mapPasswordError(err error) error {
-	msg := err.Error()
+	msg := strings.Map(func(r rune) rune {
+		if r < 0x20 && r != '\t' && r != '\n' {
+			return -1
+		}
+		return r
+	}, err.Error())
 	switch {
-	case strings.Contains(msg, "0000052D") || strings.Contains(msg, "Constraint Violation"):
-		return fmt.Errorf("%v (the password likely does not meet the domain's password policy)", err)
+	case strings.Contains(msg, "00000056"):
+		return fmt.Errorf("%s (the old password is incorrect)", msg)
+	case strings.Contains(msg, "0000052D"):
+		return fmt.Errorf("%s (rejected by domain password policy — complexity/history, minimum password age, or an incorrect old password)", msg)
+	case strings.Contains(msg, "Constraint Violation"):
+		return fmt.Errorf("%s (the password likely does not meet the domain's password policy)", msg)
 	case strings.Contains(msg, "Insufficient") || strings.Contains(msg, "00000005"):
-		return fmt.Errorf("%v (insufficient rights: an admin reset is required to set another user's password)", err)
+		return fmt.Errorf("%s (insufficient rights: an admin reset is required to set another user's password)", msg)
+	case msg == err.Error():
+		return err // nothing to strip or map — passthrough
 	default:
-		return err
+		return fmt.Errorf("%s", msg)
 	}
 }

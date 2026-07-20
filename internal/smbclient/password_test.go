@@ -46,6 +46,22 @@ func TestMapPasswordError(t *testing.T) {
 			err:  errors.New(`LDAP Result Code 53 "Unwilling To Perform": 00000005: SecErr`),
 			want: "insufficient rights",
 		},
+		{
+			// Windows answers a change-with-old whose old password does not
+			// match with Constraint Violation + 0x56 (ERROR_INVALID_PASSWORD) —
+			// the message must not blame domain policy (observed vs Server
+			// 2022), and the server's embedded NUL must be stripped.
+			name: "incorrect old password by Win32 code",
+			err:  errors.New("LDAP Result Code 19 \"Constraint Violation\": 00000056: AtrErr: DSID-03191039, #1:\n\t0: 00000056: DSID-03191039, problem 1005 (CONSTRAINT_ATT_TYPE), data 0, Att 9005a (unicodePwd)\x00"),
+			want: "old password is incorrect",
+		},
+		{
+			// 0000052D covers complexity/history AND minimum-password-age
+			// rejections (verified vs Server 2022, minPwdAge=1 day).
+			name: "min password age by Win32 code",
+			err:  errors.New(`LDAP Result Code 19 "Constraint Violation": 0000052D: AtrErr: DSID-03190F80, Att 9005a (unicodePwd)`),
+			want: "minimum password age",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -53,8 +69,13 @@ func TestMapPasswordError(t *testing.T) {
 			if !strings.Contains(got.Error(), tt.want) {
 				t.Errorf("mapPasswordError(%v) = %q, want substring %q", tt.err, got, tt.want)
 			}
-			// The original error text is preserved for context.
-			if !strings.Contains(got.Error(), tt.err.Error()) {
+			// The original error text is preserved for context — unless it
+			// carried control chars, which mapPasswordError intentionally
+			// strips (Windows embeds NULs in these messages).
+			hasCtrl := strings.IndexFunc(tt.err.Error(), func(r rune) bool {
+				return r < 0x20 && r != '\t' && r != '\n'
+			}) >= 0
+			if !hasCtrl && !strings.Contains(got.Error(), tt.err.Error()) {
 				t.Errorf("mapPasswordError(%v) = %q, want original text preserved", tt.err, got)
 			}
 		})
@@ -64,6 +85,17 @@ func TestMapPasswordError(t *testing.T) {
 		err := errors.New("connection refused")
 		if got := mapPasswordError(err); got != err {
 			t.Errorf("mapPasswordError(%v) = %v, want passthrough", err, got)
+		}
+	})
+
+	t.Run("control chars stripped", func(t *testing.T) {
+		err := errors.New("LDAP Result Code 19 \"Constraint Violation\": 00000056: bad\x00 news\x07")
+		got := mapPasswordError(err).Error()
+		if strings.ContainsRune(got, '\x00') || strings.ContainsRune(got, '\x07') {
+			t.Errorf("control chars leaked: %q", got)
+		}
+		if !strings.Contains(got, "bad news") {
+			t.Errorf("text lost along with control chars: %q", got)
 		}
 	})
 }

@@ -139,7 +139,7 @@ func (s *Session) Exec(cmd string) (output string, warnings []string, err error)
 
 	if _, err := ts.RegisterTask(taskPath, taskXML, tsch.TASK_CREATE); err != nil {
 		ui.Debugf("exec[%s]: register failed: %v", taskName, err)
-		return "", nil, fmt.Errorf("register task failed (admin required): %v", err)
+		return "", nil, fmt.Errorf("register task failed%s: %v", registerHint(err), err)
 	}
 	ui.Debugf("exec[%s]: registered %s", taskName, taskPath)
 
@@ -317,7 +317,25 @@ func randHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
+// registerHint names the common SchRpcRegisterTask failure causes for the
+// error message. Only E_ACCESS_DENIED justifies "admin required" — other
+// failures are not privilege problems (0x8004131a SCHED_E_MALFORMEDXML
+// means the command produced invalid task XML, e.g. raw control bytes).
+func registerHint(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "0x80070005"), strings.Contains(msg, "0x00000005"):
+		return " (admin required)"
+	case strings.Contains(msg, "0x8004131a"):
+		return " (task XML rejected as malformed — check for special characters in the command)"
+	default:
+		return ""
+	}
+}
+
 // xmlEscape escapes special XML characters (matches atexec's xml_escape).
+// Raw control bytes cannot be represented in XML 1.0 and are the caller's
+// problem (registerHint names the resulting server error).
 func xmlEscape(s string) string {
 	s = strings.ReplaceAll(s, "&", "&amp;")
 	s = strings.ReplaceAll(s, "\"", "&quot;")

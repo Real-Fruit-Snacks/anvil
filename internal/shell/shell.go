@@ -556,8 +556,8 @@ func (s *shell) cmdSessions() {
 	}
 }
 
-// cmdExec runs a single command on the target via a temporary service
-// (smbexec method). Server-level op: needs no selected share.
+// cmdExec runs a single command on the target via a scheduled task (TSCH).
+// Server-level op: needs no selected share.
 func (s *shell) cmdExec(args []string) {
 	if len(args) < 1 {
 		fmt.Printf("  %s\n", ui.Muted.Sprint("usage: exec <command...>"))
@@ -1077,7 +1077,7 @@ func (s *shell) cmdDpapi() {
 		return
 	}
 	if len(entries) == 0 {
-		ui.Faint.Println("  no credential blobs found")
+		ui.Faint.Println("  no credentials decrypted")
 		return
 	}
 	ui.Muted.Printf("  %-32s %-24s %s\n", "TARGET", "USERNAME", "SECRET")
@@ -1248,22 +1248,37 @@ func isAbsWinPath(p string) bool {
 	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
 }
 
+// parseRegQueryArgs splits `reg query` arguments into the key path and an
+// optional /v value name. Anything beyond that is a surplus token — most
+// often an unquoted key path containing a space, which would otherwise
+// silently query the wrong key (observed on a live DC: an unquoted
+// "HKLM\...\Windows NT\CurrentVersion" queried ...\Windows instead).
+func parseRegQueryArgs(args []string) (keyPath, valueName string, hasV bool, surplus string) {
+	if len(args) == 0 {
+		return "", "", false, ""
+	}
+	keyPath = args[0]
+	for i := 1; i < len(args); i++ {
+		if strings.EqualFold(args[i], "/v") && i+1 < len(args) {
+			valueName, hasV = args[i+1], true
+			i++
+			continue
+		}
+		return keyPath, "", false, args[i]
+	}
+	return keyPath, valueName, hasV, ""
+}
+
 // cmdRegQuery reads the remote registry (winreg).
 func (s *shell) cmdRegQuery(args []string) {
-	if len(args) < 1 {
+	keyPath, valueName, hasV, surplus := parseRegQueryArgs(args)
+	if keyPath == "" {
 		s.regUsage()
 		return
 	}
-	keyPath := args[0]
-
-	valueName := ""
-	hasV := false
-	for i := 1; i < len(args); i++ {
-		if strings.EqualFold(args[i], "/v") && i+1 < len(args) {
-			valueName = args[i+1]
-			hasV = true
-			i++
-		}
+	if surplus != "" {
+		fmt.Printf("  %s\n", ui.Muted.Sprintf("unexpected argument %q — quote key paths containing spaces", surplus))
+		return
 	}
 
 	if hasV {

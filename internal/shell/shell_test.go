@@ -32,3 +32,30 @@ func TestSplitArgs(t *testing.T) {
 		})
 	}
 }
+
+func TestParseRegQueryArgs(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    []string
+		keyPath string
+		value   string
+		hasV    bool
+		surplus string
+	}{
+		{"plain key", []string{`HKLM\SOFTWARE\Foo`}, `HKLM\SOFTWARE\Foo`, "", false, ""},
+		{"key with /v", []string{`HKLM\SOFTWARE\Foo`, "/v", "Bar"}, `HKLM\SOFTWARE\Foo`, "Bar", true, ""},
+		{"quoted path with space", []string{`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion`}, `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion`, "", false, ""},
+		{"unquoted path with space flags surplus", []string{`HKLM\SOFTWARE\Microsoft\Windows`, `NT\CurrentVersion`}, `HKLM\SOFTWARE\Microsoft\Windows`, "", false, `NT\CurrentVersion`},
+		{"dangling /v is surplus", []string{`HKLM\Foo`, "/v"}, `HKLM\Foo`, "", false, "/v"},
+		{"empty args", nil, "", "", false, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			keyPath, value, hasV, surplus := parseRegQueryArgs(c.args)
+			if keyPath != c.keyPath || value != c.value || hasV != c.hasV || surplus != c.surplus {
+				t.Errorf("parseRegQueryArgs(%v) = (%q, %q, %v, %q), want (%q, %q, %v, %q)",
+					c.args, keyPath, value, hasV, surplus, c.keyPath, c.value, c.hasV, c.surplus)
+			}
+		})
+	}
+}

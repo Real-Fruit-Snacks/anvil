@@ -131,7 +131,8 @@ KRB5CCNAME=Administrator@cifs_dc01.corp.local.ccache \
 
 `getst` needs the SPN (`-spn`), the user to impersonate (`-impersonate`),
 the requesting account (`-u`/`-p` or `--hashes`), and the DNS realm (`-d`);
-`--dc-ip` overrides the KDC address. Denials are themed (no
+`--dc-ip` overrides the KDC address. As with any `-k` connect, when DNS
+can't resolve the FQDN pass `--target-ip` as well. Denials are themed (no
 constrained-delegation rights vs. delegation not allowed).
 
 `kerberoast` needs any authenticated domain user. It uses two transient
@@ -183,9 +184,12 @@ one transient LDAPS channel (announced; falls back to plain LDAP when the
 TLS handshake fails — e.g. Samba certs Go's x509 parser rejects). With two
 arguments it is an admin reset (replace the password outright, needs reset
 rights); with the old password given it is a user change (delete old + add
-new in one modify request, per MS-ADTS 3.1.1.3.1.5). Policy violations
-(0000052D) and rights failures are reported with the underlying LDAP
-result.
+new in one modify request, per MS-ADTS 3.1.1.3.1.5). Both paths are
+verified against Windows Server 2022 — note a change counts as a *change*
+(not a reset) for policy, so the domain's minimum password age applies to
+it. Rejections are themed by Win32 code: 00000056 means the old password
+was wrong, 0000052D means policy (complexity/history/minimum age) or an
+old-password mismatch.
 
 `dcsync` requires Domain Admins or Replicating Directory Changes rights.
 DRSUAPI has no SMB named-pipe endpoint, so it necessarily opens ONE extra
@@ -214,7 +218,11 @@ via gopacket's pkg/ese + pkg/registry), printing secretsdump-format
 all deleted afterwards — any leftover is named in a warning. The domain
 prefix comes from the session's `-d` domain, falling back to the NTLM
 challenge's DNS tree name; the NTDS.dit path is the default
-`C:\Windows\NTDS\ntds.dit`.
+`C:\Windows\NTDS\ntds.dit`. Two caveats: only `ntds.dit` itself is copied
+(no `edb.log`/`edb.chk` replay), so the dump reflects the directory as of
+the last ESE flush — accounts created minutes earlier may be missing (this
+matches impacket's VSS behavior); and domain group accounts print too with
+the empty NT hash, so the account count runs higher than impacket's.
 
 `dpapi` requires admin on the target. It reuses the lsadump flow (save +
 download + delete the SECURITY and SYSTEM hives) to recover the
@@ -238,13 +246,20 @@ SECURITY, or full hives needs admin with backup privilege on the target.
 Example: `reg query HKLM\SOFTWARE\Microsoft` lists subkeys and values;
 `reg query HKLM\SYSTEM\CurrentControlSet\Control /v CurrentVersion` reads
 one value with type and data (SZ/MULTI_SZ/DWORD/QWORD rendered as text,
-BINARY as capped hex). HKCC is not supported (no `OpenCurrentConfig` in
-gopacket's winreg).
+BINARY as capped hex). Quote key paths containing spaces (`reg query
+"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion"`) — surplus arguments
+are rejected rather than silently querying a truncated path. HKCC is not
+supported (no `OpenCurrentConfig` in gopacket's winreg).
 
 `shares` shows smbmap-style access per share: tree connect + directory read
 for READ, and a WRITE probe that briefly creates and deletes a tiny
 uniquely-named file (`anv-<rand>.tmp`) at the share root (like smbmap).
-Probing never changes the currently selected share.
+Probing never changes the currently selected share. Caveat: on a Windows
+DC's SYSVOL the stock ACL grants Administrators create/write but not delete
+at the share root, so the probe file cannot be removed there — anvil names
+the leftover (`left anv-<rand>.tmp`) and moves on; delete it target-side
+(e.g. `exec cmd /c del C:\Windows\SYSVOL\sysvol\anv-*.tmp`, which runs as
+SYSTEM).
 
 `exec` runs a single command on the target via a temporary scheduled task
 (TSCH, atexec-style): the task `anv-<rand>` runs `cmd.exe /C <cmd>` with
@@ -267,7 +282,10 @@ Windows event logs (task registration/run — 4698/4699), and waits at most
 | `--dc-ip` | | | KDC address override for kerberos |
 | `--dc-host` | | | DC hostname override for kerberos |
 
-No credentials at all attempts a null session. The persistent `--timeout`
+No credentials at all attempts a null session. Windows refuses anonymous
+SMB session setup outright (themed error, non-zero exit); Samba's lab DC
+accepts the session and then denies each operation, which is why the e2e
+suite can exercise the null-session shell. The persistent `--timeout`
 flag applies.
 
 ### Kerberos
@@ -300,6 +318,10 @@ Scripted (non-interactive) use works by piping commands on stdin:
 ```
 printf 'use ANVIL\nls\nexit\n' | anvil connect --host 192.168.10.5 -u alice -p 's3cret'
 ```
+
+When scripting paths with backslashes, mind your shell's escape processing:
+`printf '...'` interprets `\a \b \t ...` in its format string and will
+mangle SMB paths — use `printf '%s\n' 'line1' 'line2'` instead.
 
 Color output follows the NO_COLOR convention and is disabled automatically
 when output is not a terminal. Colors come from the

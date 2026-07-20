@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **Verified against Windows Server 2022**: the full feature matrix was
+  exercised against a real Windows DC — dcsync, golden/silver tickets
+  with `connect -k`, RBCD + `getst` impersonation, `ntdsdump` (hashes
+  match dcsync one-for-one), `samdump`/`lsadump`/`dpapi`, `kerberoast`/
+  `asrep`, `exec`, `changepasswd` (both paths, including the first-ever
+  verification of change-with-old), `addcomputer`/`delcomputer`.
+- **Services enumeration fix**: `services` no longer misattributes
+  states. Windows packs REnumServicesStatusW's records immediately after
+  the referent — no maxCount/actualCount header — in documented
+  [nameOff][displayOff][SERVICE_STATUS] order; the old parse invented the
+  header and gave every service the PREVIOUS record's state (~half the
+  list inverted on Server 2022) and dropped the first record. The layout
+  is sniffed from the first record; Samba's shape still parses.
+- **changepasswd error mapping**: an incorrect old password (00000056)
+  says so instead of blaming password policy; 0000052D's hint names
+  minimum password age as a cause; NUL/control bytes embedded in Windows
+  LDAP error text are stripped before printing.
+- **Small fixes**: `reg query` rejects surplus arguments (an unquoted
+  path with a space silently queried the wrong key); the dpapi summary no
+  longer claims "no credential blobs found" when blobs existed but failed
+  to decrypt; `exec` task-register failure only says "admin required" for
+  access-denied (0x8004131a gets a malformed-XML hint).
 - **Light-mode palette**: both Terminal Workbench ramps are now supported
   (THEME-SPEC §6). Dark stays the default; `ANVIL_THEME=light` or a
   `COLORFGBG` light background (7/15) selects the light ramp so colored

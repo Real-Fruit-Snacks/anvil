@@ -97,8 +97,9 @@ var getstLongFlags = map[string]bool{
 	"hashes": true, "domain": true, "dc-ip": true, "out": true, "help": true,
 }
 
-// rewriteTicketArgs maps ticket's and getst's documented impacket-style
-// single-dash long flags onto cobra's double-dash form, in place. pflag
+// rewriteTicketArgs maps the documented impacket-style single-dash long
+// flags of ticket, getst, and gettgt onto cobra's double-dash form, in
+// place. pflag
 // reads -krbtgt as shorthand -k with an attached value, so the exact CLI
 // `anvil ticket -krbtgt ...` only parses by rewriting before rootCmd runs.
 // Rewriting is semantically neutral for other commands: any name in either
@@ -126,6 +127,8 @@ func rewriteTicketArgs(args []string) {
 		longFlags = ticketLongFlags
 	case "getst":
 		longFlags = getstLongFlags
+	case "gettgt":
+		longFlags = gettgtLongFlags
 	default:
 		return
 	}

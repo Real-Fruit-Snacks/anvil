@@ -12,11 +12,83 @@ import (
 	"strconv"
 	"strings"
 
+	"anvil/internal/adenum"
 	"anvil/internal/dmsa"
 	"anvil/internal/smbclient"
 	"anvil/internal/track"
 	"anvil/internal/ui"
 )
+
+// outPath extracts a `--out <file>` value from command args, resolved
+// against the session loot dir (bare filenames land there). bad reports
+// that --out was given without a value — a usage error.
+func (s *shell) outPath(args []string) (out string, bad bool) {
+	for i, a := range args {
+		if strings.EqualFold(a, "--out") {
+			if i+1 >= len(args) {
+				return "", true
+			}
+			return s.lootPath(args[i+1]), false
+		}
+	}
+	return "", false
+}
+
+// writeLoot writes hash/secret lines to the loot file and confirms; a
+// failed write is a warm warning, never fatal to the session.
+func (s *shell) writeLoot(out, header string, lines []string) {
+	if err := WriteLootLines(out, header, lines); err != nil {
+		ui.Warm.Printf("  warning: could not write loot: %v\n", err)
+		return
+	}
+	ui.Faint.Printf("  wrote %d lines to %s\n", len(lines), out)
+}
+
+// cmdTrusts lists domain trust relationships over one transient LDAP
+// channel (announced). A single-domain forest prints "no trusts".
+func (s *shell) cmdTrusts() {
+	ui.Faint.Println("  opening LDAP channel")
+	trusts, err := adenum.Trusts(s.sess.Host(), s.sess.Creds())
+	if err != nil {
+		s.opError(err)
+		return
+	}
+	if len(trusts) == 0 {
+		ui.Faint.Println("  no trusts")
+		return
+	}
+	rows := make([][]tableCell, 0, len(trusts))
+	for _, t := range trusts {
+		rows = append(rows, rowCells(t.Name, t.Direction, t.Type, t.Attributes))
+	}
+	printTable([]string{"NAME", "DIRECTION", "TYPE", "ATTRIBUTES"}, rows)
+}
+
+// cmdWhoAmI prints the session user, SID, and full (nested) group
+// memberships — the operator's whoami /groups.
+func (s *shell) cmdWhoAmI() {
+	ui.Faint.Println("  opening LDAP channel")
+	info, err := s.sess.WhoAmI()
+	if err != nil {
+		s.opError(err)
+		return
+	}
+	fmt.Printf("  %s %s\n", ui.Muted.Sprint("USER"), info.User)
+	fmt.Printf("  %s %s\n", ui.Muted.Sprint("SID"), ui.Faint.Sprint(info.SID))
+	if len(info.Groups) == 0 {
+		ui.Faint.Println("  (no group memberships resolved)")
+		return
+	}
+	rows := make([][]tableCell, 0, len(info.Groups))
+	for _, g := range info.Groups {
+		name := g.Name
+		if name == "" {
+			name = "-"
+		}
+		rows = append(rows, rowCells(name, g.SID))
+	}
+	printTable([]string{"GROUP", "SID"}, rows)
+}
 
 // printExecOutcome renders one remote-execution result in cmdExec's idiom.
 func (s *shell) printExecOutcome(method, cmdLine, out string, warnings []string, err error) {

@@ -52,4 +52,10 @@ func init() {
 	rootCmd.AddCommand(newGetSTCmd())
 	rootCmd.AddCommand(NewDescribeCmd())
 	rootCmd.AddCommand(NewConvertCmd())
+	rootCmd.AddCommand(newGetTGTCmd())
+	rootCmd.AddCommand(newSprayCmd())
+	rootCmd.AddCommand(newUserenumCmd())
+	rootCmd.AddCommand(newSamdumpCmd())
+	rootCmd.AddCommand(newLsadumpCmd())
+	rootCmd.AddCommand(newNtdsdumpCmd())
 }

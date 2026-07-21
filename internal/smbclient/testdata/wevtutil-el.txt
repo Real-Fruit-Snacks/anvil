@@ -1,0 +1,10 @@
+Application
+DFS Replication
+DNS Server
+Directory Service
+ForwardedEvents
+Microsoft-Windows-PowerShell/Operational
+Security
+System
+Windows PowerShell
+

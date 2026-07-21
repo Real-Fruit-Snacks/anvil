@@ -29,8 +29,13 @@ import (
 	"anvil/internal/roast"
 	"anvil/internal/sam"
 	"anvil/internal/smbclient"
+	"anvil/internal/track"
 	"anvil/internal/ui"
 )
+
+// keepaliveInterval is the idle gap after which dispatch pings the session
+// before running the next command (see dispatch's comment).
+const keepaliveInterval = 5 * time.Minute
 
 type shell struct {
 	sess   *smbclient.Session
@@ -38,6 +43,12 @@ type shell struct {
 	shares []string // cached for tab completion
 	groups []string // cached group names for `members` completion
 	dead   bool     // set on fatal transport error; shell exits after the command
+
+	tracker    *track.Tracker // write-op audit for `changes` and the exit banner
+	rrRestore  func() error   // RemoteRegistry restore closure (ensureWinreg)
+	history    []string       // typed lines, for `!<n>` re-execution
+	bangDepth  int            // recursion guard for `!<n>`
+	lastActive time.Time      // last command completed — drives the idle keepalive ping
 }
 
 // Run starts the interactive shell and returns the process exit code
@@ -46,11 +57,31 @@ type shell struct {
 // tools/smbclient, which uses a plain scanner for its -input-file mode —
 // and lines are read verbatim.
 func Run(sess *smbclient.Session) int {
-	s := &shell{sess: sess}
+	s := &shell{sess: sess, tracker: track.New(), lastActive: time.Now()}
+	var code int
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return s.runPiped(os.Stdin)
+		code = s.runPiped(os.Stdin)
+	} else {
+		code = s.runInteractive()
 	}
-	return s.runInteractive()
+	s.shutdown()
+	return code
+}
+
+// shutdown runs on every shell exit: restore the RemoteRegistry state if a
+// winreg consumer changed it, and print the write-op audit summary.
+func (s *shell) shutdown() {
+	if s.rrRestore != nil {
+		if err := s.rrRestore(); err != nil {
+			ui.Warm.Printf("  warning: could not restore RemoteRegistry's prior state (%v) — it may have been left running\n", err)
+		} else {
+			ui.Faint.Println("  RemoteRegistry state restored")
+		}
+	}
+	if s.tracker.Count() > 0 {
+		fmt.Println()
+		fmt.Println(s.tracker.Summary())
+	}
 }
 
 // runPiped processes commands from a non-terminal stdin without prompts.
@@ -177,8 +208,26 @@ func (s *shell) prompt() string {
 // line is the raw input; commands that forward text to the target (exec
 // family, wmiquery) use rawRest — the verbatim remainder after the command
 // word — because splitArgs strips quote characters that are data to the
-// remote side (e.g. WQL string literals).
+// remote side (e.g. WQL string literals). Lines starting with `!` are the
+// local-shell/history escape and never reach command handlers. Every line
+// is appended to the in-memory history (for `!<n>`), and an idle gap over
+// keepaliveInterval triggers a session liveness ping before the command —
+// piggybacked on dispatch rather than a goroutine, so the SMB connection
+// is never touched concurrently (a goroutine ping would race long-running
+// commands like ntdsdump on the wire).
 func (s *shell) dispatch(line string, args []string) (code int, done bool) {
+	if strings.HasPrefix(line, "!") {
+		s.cmdBang(line)
+		return 0, false
+	}
+	if time.Since(s.lastActive) > keepaliveInterval {
+		if err := s.sess.Ping(); err != nil {
+			ui.Warm.Printf("  warning: session check failed (%v) — try reconnect\n", err)
+		}
+	}
+	s.lastActive = time.Now()
+	s.history = append(s.history, line)
+
 	cmd := strings.ToLower(args[0])
 	rest := args[1:]
 	rawRest := ""
@@ -281,6 +330,34 @@ func (s *shell) dispatch(line string, args []string) (code int, done bool) {
 		s.cmdBadSuccessor(rest)
 	case "raisechild":
 		s.cmdRaiseChild(rest)
+	case "svc":
+		s.cmdSvc(rest)
+	case "tasks", "taskshow", "taskrun", "taskdel":
+		if cmd == "tasks" {
+			s.cmdTasks(rest)
+		} else {
+			s.cmdTasks(append([]string{cmd}, rest...))
+		}
+	case "time":
+		s.cmdTime()
+	case "portfwd":
+		s.cmdPortfwd(rest)
+	case "procs":
+		s.cmdProcs()
+	case "find":
+		s.cmdFind(rest)
+	case "download":
+		s.cmdDownload(rest)
+	case "eventlog":
+		s.cmdEventlog(rest)
+	case "changes":
+		s.cmdChanges(rest)
+	case "enumpipes":
+		s.cmdEnumPipes()
+	case "ping":
+		s.cmdPing()
+	case "reconnect":
+		s.cmdReconnect()
 	default:
 		ui.Warm.Printf("  unknown command %q — try help\n", cmd)
 	}
@@ -337,6 +414,21 @@ func (s *shell) cmdHelp() {
 		{"samadd|samdel <group> <user>", "add/remove a group member via SAMR"},
 		{"badsuccessor [enum|keys <dmsa$>]", "dMSA abuse (Server 2025 DCs; clean denial on older)"},
 		{"raisechild <child-krbtgt-hash> [out]", "forge EA golden ticket via SIDHistory (child domains only)"},
+		{"svc <start|stop|config> <name> [type]", "control Windows services (svcctl, admin)"},
+		{"tasks|taskshow|taskrun|taskdel", "manage scheduled tasks (tsch)"},
+		{"time", "server clock, zone, and uptime (srvsvc)"},
+		{"reg set|delvalue|createkey|delkey", "write remote registry values/keys (winreg)"},
+		{"reg search <root> <pattern>", "search registry keys/values (winreg)"},
+		{"portfwd [list|add|remove|clear]", "PortProxy v4tov4 relay rules (registry)"},
+		{"procs", "list processes via perf counters (no WMI)"},
+		{"find [start] [filters]", "search the share (name/regex/size/mtime/depth/limit)"},
+		{"download <remote> <local> [--resume] [--restart]", "resumable file download"},
+		{"eventlog list|query <log> [filters]", "read Windows event logs (wevtutil)"},
+		{"enumpipes", "list and categorize named pipes"},
+		{"changes [--save] [--clear]", "write-op audit trail"},
+		{"ping", "check session liveness"},
+		{"reconnect", "re-dial and re-attach the share"},
+		{"! <cmd> | !<n>", "run a local command / re-run history entry n"},
 		{"exit, quit", "close the session"},
 	}
 	for _, r := range rows {
@@ -480,6 +572,7 @@ func (s *shell) cmdPut(args []string) {
 	}
 
 	n, elapsed, err := s.sess.Put(local, remote)
+	s.trackOp(track.CategoryFile, "put", remote, fmt.Sprintf("%d bytes", n), err)
 	if err != nil {
 		s.opError(err)
 		return
@@ -496,7 +589,9 @@ func (s *shell) cmdRm(args []string) {
 		return
 	}
 	file := strings.Join(args, " ")
-	if err := s.sess.Rm(file); err != nil {
+	err := s.sess.Rm(file)
+	s.trackOp(track.CategoryFile, "rm", file, "", err)
+	if err != nil {
 		s.opError(err)
 		return
 	}
@@ -512,7 +607,9 @@ func (s *shell) cmdMkdir(args []string) {
 		return
 	}
 	dir := strings.Join(args, " ")
-	if err := s.sess.Mkdir(dir); err != nil {
+	err := s.sess.Mkdir(dir)
+	s.trackOp(track.CategoryFile, "mkdir", dir, "", err)
+	if err != nil {
 		s.opError(err)
 		return
 	}
@@ -528,7 +625,9 @@ func (s *shell) cmdRmdir(args []string) {
 		return
 	}
 	dir := strings.Join(args, " ")
-	if err := s.sess.Rmdir(dir); err != nil {
+	err := s.sess.Rmdir(dir)
+	s.trackOp(track.CategoryFile, "rmdir", dir, "", err)
+	if err != nil {
 		s.opError(err)
 		return
 	}
@@ -543,7 +642,9 @@ func (s *shell) cmdRename(args []string) {
 		fmt.Printf("  %s\n", ui.Muted.Sprint("usage: rename <old> <new>"))
 		return
 	}
-	if err := s.sess.Rename(args[0], args[1]); err != nil {
+	err := s.sess.Rename(args[0], args[1])
+	s.trackOp(track.CategoryFile, "rename", args[0], "-> "+args[1], err)
+	if err != nil {
 		s.opError(err)
 		return
 	}
@@ -608,6 +709,7 @@ func (s *shell) cmdExec(cmdLine string) {
 		return
 	}
 	out, warnings, err := s.sess.Exec(cmdLine)
+	s.trackOp(track.CategoryExec, "exec", cmdLine, "", err)
 	for _, w := range warnings {
 		ui.Warm.Printf("  warning: %s\n", w)
 	}
@@ -839,7 +941,9 @@ func (s *shell) cmdRBCD(args []string) {
 			return
 		}
 		target, allowed := args[1], args[2]
-		if err := s.sess.SetRBCD(target, allowed); err != nil {
+		err := s.sess.SetRBCD(target, allowed)
+		s.trackOp(track.CategoryAD, "rbcd set", target, allowed, err)
+		if err != nil {
 			s.opError(err)
 			return
 		}
@@ -850,7 +954,9 @@ func (s *shell) cmdRBCD(args []string) {
 			return
 		}
 		target := args[1]
-		if err := s.sess.ClearRBCD(target); err != nil {
+		err := s.sess.ClearRBCD(target)
+		s.trackOp(track.CategoryAD, "rbcd clear", target, "", err)
+		if err != nil {
 			s.opError(err)
 			return
 		}
@@ -888,7 +994,9 @@ func (s *shell) cmdAddComputer(args []string) {
 	}
 
 	ui.Faint.Println("  opening LDAP channel (attribute setup)")
-	if err := s.sess.AddComputer(name, password); err != nil {
+	err := s.sess.AddComputer(name, password)
+	s.trackOp(track.CategoryAD, "addcomputer", name+"$", "", err)
+	if err != nil {
 		s.opError(err)
 		return
 	}
@@ -907,7 +1015,9 @@ func (s *shell) cmdDelComputer(args []string) {
 	name := args[0]
 
 	ui.Faint.Println("  opening LDAP channel")
-	if err := s.sess.DeleteComputer(name); err != nil {
+	err := s.sess.DeleteComputer(name)
+	s.trackOp(track.CategoryAD, "delcomputer", name+"$", "", err)
+	if err != nil {
 		s.opError(err)
 		return
 	}
@@ -928,7 +1038,9 @@ func (s *shell) cmdChangePassword(args []string) {
 	}
 
 	ui.Faint.Println("  opening LDAPS channel")
-	if err := s.sess.ChangePassword(user, newPass, oldPass); err != nil {
+	err := s.sess.ChangePassword(user, newPass, oldPass)
+	s.trackOp(track.CategoryAD, "changepasswd", user, "", err)
+	if err != nil {
 		s.opError(err)
 		return
 	}
@@ -1112,7 +1224,11 @@ func printTable(headers []string, rows [][]tableCell) {
 // cmdDpapi decrypts Credential Manager secrets using the LSA masterkeys.
 // Server-level op: needs no selected share (opens C$ transiently).
 func (s *shell) cmdDpapi() {
+	if !s.ensureWinreg() {
+		return
+	}
 	entries, warnings, err := s.sess.DumpCredentials()
+	s.trackOp(track.CategoryRegistry, "dpapi", "SECURITY+SYSTEM hives", "", err)
 	for _, w := range warnings {
 		ui.Warm.Printf("  warning: %s\n", w)
 	}
@@ -1170,6 +1286,7 @@ func (s *shell) cmdDcsync() {
 func (s *shell) cmdNtdsdump() {
 	ui.Faint.Println("  creating shadow copy on target (exec as SYSTEM)")
 	users, warnings, err := s.sess.NtdsDump()
+	s.trackOp(track.CategoryRegistry, "ntdsdump", "VSS shadow + ntds.dit", "", err)
 	for _, w := range warnings {
 		ui.Warm.Printf("  warning: %s\n", w)
 	}
@@ -1198,7 +1315,11 @@ func (s *shell) cmdNtdsdump() {
 // cmdLsadump prints LSA secrets and cached domain logons (MSCashV2).
 // Server-level op: needs no selected share.
 func (s *shell) cmdLsadump() {
+	if !s.ensureWinreg() {
+		return
+	}
 	res, warnings, err := s.sess.LsaDump()
+	s.trackOp(track.CategoryRegistry, "lsadump", "SECURITY+SYSTEM hives", "", err)
 	for _, w := range warnings {
 		ui.Warm.Printf("  warning: %s\n", w)
 	}
@@ -1227,7 +1348,11 @@ func (s *shell) cmdLsadump() {
 // cmdSamdump prints local account NT/LM hashes in secretsdump format.
 // Server-level op: needs no selected share.
 func (s *shell) cmdSamdump() {
+	if !s.ensureWinreg() {
+		return
+	}
 	users, warnings, err := s.sess.SamDump()
+	s.trackOp(track.CategoryRegistry, "samdump", "SAM+SYSTEM hives", "", err)
 	for _, w := range warnings {
 		ui.Warm.Printf("  warning: %s\n", w)
 	}
@@ -1245,10 +1370,14 @@ func (s *shell) cmdSamdump() {
 }
 
 // cmdReg dispatches registry subcommands. Server-level op: needs no
-// selected share.
+// selected share. All subcommands need the RemoteRegistry service —
+// ensureWinreg starts it lazily (restored at exit).
 func (s *shell) cmdReg(args []string) {
 	if len(args) < 1 {
 		s.regUsage()
+		return
+	}
+	if !s.ensureWinreg() {
 		return
 	}
 	switch strings.ToLower(args[0]) {
@@ -1256,13 +1385,23 @@ func (s *shell) cmdReg(args []string) {
 		s.cmdRegQuery(args[1:])
 	case "save":
 		s.cmdRegSave(args[1:])
+	case "set":
+		s.cmdRegSet(args[1:])
+	case "delvalue":
+		s.cmdRegDelValue(args[1:])
+	case "createkey":
+		s.cmdRegCreateKey(args[1:])
+	case "delkey":
+		s.cmdRegDelKey(args[1:])
+	case "search":
+		s.cmdRegSearch(args[1:])
 	default:
 		s.regUsage()
 	}
 }
 
 func (s *shell) regUsage() {
-	fmt.Printf("  %s\n", ui.Muted.Sprint(`usage: reg query <HIVE\path> [/v valueName] | reg save <HIVE\path> <remote-file>`))
+	fmt.Printf("  %s\n", ui.Muted.Sprint(`usage: reg query <HIVE\path> [/v name] | reg save <HIVE\path> <remote-file> | reg set <key> <value> <type> <data> | reg delvalue <key> <value> | reg createkey <key> | reg delkey <key> | reg search <root> <pattern>`))
 }
 
 // cmdRegSave exports a key to a file on the target's filesystem.
@@ -1277,9 +1416,11 @@ func (s *shell) cmdRegSave(args []string) {
 		return
 	}
 	if err := s.sess.RegSave(keyPath, remoteFile); err != nil {
+		s.trackOp(track.CategoryRegistry, "save", keyPath, remoteFile, err)
 		s.opError(err)
 		return
 	}
+	s.trackOp(track.CategoryRegistry, "save", keyPath, remoteFile, nil)
 	ui.Faint.Printf("  saved %s -> %s\n", keyPath, remoteFile)
 }
 

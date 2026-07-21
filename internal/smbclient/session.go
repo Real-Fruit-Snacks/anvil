@@ -19,68 +19,137 @@ import (
 // Session is a persistent authenticated SMB session.
 type Session struct {
 	client        *smb.Client
-	creds         *session.Credentials // kept for RPC interfaces needing an authenticated bind (tsch)
+	creds         *session.Credentials // kept for RPC interfaces needing an authenticated bind (tsch) and for Reconnect; the password (if any) lives here in memory only — never logged
 	conn          net.Conn             // kerberos path only (pkg/smb owns its conn on the NTLM path)
 	smbSessionKey []byte               // kerberos path only (pkg/smb exposes it via GetSessionKey on NTLM)
 	host          string
 	port          int
-	targetIP      string // --target-ip override; extra channels (DCOM) must dial it, not host
-	share         string // currently selected share (pkg/smb keeps it unexported)
-	null          bool   // true when no credentials were supplied (null session)
+	targetIP      string        // --target-ip override; extra channels (DCOM) must dial it, not host
+	share         string        // currently selected share (pkg/smb keeps it unexported)
+	null          bool          // true when no credentials were supplied (null session)
+	timeout       time.Duration // dial timeout, stored for Reconnect
 }
 
 // Connect establishes an SMB session to host:port with the given credentials.
+// The connect parameters (host/port/targetIP/credentials/timeout) are stored
+// in the Session so Reconnect can re-dial later — note this keeps the
+// password, if one was supplied, alive in memory for the session's lifetime.
 // pkg/smb dials through gopacket's internal transport.Dialer (const 30s
 // timeout, no exported knob), so a reachability pre-flight with our own
 // timeout keeps --timeout meaningful for dead hosts; the real session then
 // connects via pkg/smb exactly like gopacket's tools/smbclient.
 func Connect(host string, port int, targetIP string, creds *session.Credentials, timeout time.Duration, nullSession bool) (*Session, error) {
-	if creds.UseKerberos {
+	s := &Session{
+		creds: creds, host: host, port: port, targetIP: targetIP,
+		null: nullSession, timeout: timeout,
+	}
+	if err := s.dial(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// dial establishes (or, from Reconnect, re-establishes) the SMB transport
+// and session from the stored connect parameters.
+func (s *Session) dial() error {
+	if s.creds.UseKerberos {
 		// Kerberos path: single dial inside connectKerberos (no pre-flight —
 		// one connection, one session like the NTLM path).
-		target := session.Target{Host: host, Port: port, IP: targetIP}
-		client, conn, key, err := connectKerberos(target, creds, timeout)
+		target := session.Target{Host: s.host, Port: s.port, IP: s.targetIP}
+		client, conn, key, err := connectKerberos(target, s.creds, s.timeout)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		return &Session{client: client, creds: creds, conn: conn, smbSessionKey: key, host: host, port: port, targetIP: targetIP}, nil
+		s.client, s.conn, s.smbSessionKey = client, conn, key
+		return nil
 	}
 
-	dialHost := host
-	if targetIP != "" {
-		dialHost = targetIP
+	dialHost := s.host
+	if s.targetIP != "" {
+		dialHost = s.targetIP
 	}
-	addr := net.JoinHostPort(dialHost, strconv.Itoa(port))
+	addr := net.JoinHostPort(dialHost, strconv.Itoa(s.port))
 
-	probe, err := net.DialTimeout("tcp", addr, timeout)
+	probe, err := net.DialTimeout("tcp", addr, s.timeout)
 	if err != nil {
-		return nil, fmt.Errorf("cannot reach %s: %v", addr, err)
+		return fmt.Errorf("cannot reach %s: %v", addr, err)
 	}
 	probe.Close()
 
-	client := smb.NewClient(session.Target{Host: host, Port: port, IP: targetIP}, creds)
+	client := smb.NewClient(session.Target{Host: s.host, Port: s.port, IP: s.targetIP}, s.creds)
 	if err := client.Connect(); err != nil {
-		return nil, mapConnectError(err, nullSession, false)
+		return mapConnectError(err, s.null, false)
 	}
 
 	// Backfill the domain from the NTLM challenge when the user didn't pass
 	// -d: LDAP features (adenum, roast) need it for bind identities, and the
 	// server told us at connect time anyway.
-	if creds.Domain == "" {
+	if s.creds.Domain == "" {
 		if tree := client.GetDNSTreeName(); tree != "" {
-			creds.Domain = tree
+			s.creds.Domain = tree
 		}
 	}
 
-	return &Session{client: client, creds: creds, host: host, port: port, targetIP: targetIP, null: nullSession}, nil
+	s.client = client
+	return nil
 }
 
-// Close tears down shares, session, and connection.
+// Close tears down shares, session, and connection. Idempotent: after Close
+// the Session holds no client, and only Reconnect can make it usable again.
 func (s *Session) Close() {
-	s.client.Close()
+	if s.client != nil {
+		s.client.Close()
+		s.client = nil
+	}
 	if s.conn != nil {
 		s.conn.Close()
+		s.conn = nil
 	}
+}
+
+// Ping is a cheap liveness probe for the session's transport: a srvsvc share
+// enum over IPC$ (SMB2 has no echo op, so this is the lightest call that
+// proves the negotiated session still answers). Returns nil when healthy;
+// transport failures come back as *smb2.TransportError (see
+// IsTransportError).
+func (s *Session) Ping() error {
+	if s.client == nil {
+		return fmt.Errorf("no active SMB session")
+	}
+	_, err := s.client.ListShares()
+	return err
+}
+
+// Reconnect tears down the current transport and re-dials with the connect
+// parameters stored at Connect time (host/port/targetIP/credentials/timeout
+// — the password, if any, lives only in the in-memory creds). The previously
+// selected share, if any, is re-attached. The shell calls this on its
+// `reconnect` command, typically after Ping or a failed command showed the
+// transport is dead. On error the old (possibly dead) client is left in
+// place so Close stays safe.
+func (s *Session) Reconnect() error {
+	prevShare := s.share
+	oldClient, oldConn, oldKey := s.client, s.conn, s.smbSessionKey
+
+	s.client, s.conn, s.smbSessionKey, s.share = nil, nil, nil, ""
+	if err := s.dial(); err != nil {
+		s.client, s.conn, s.smbSessionKey, s.share = oldClient, oldConn, oldKey, prevShare
+		return err
+	}
+
+	if oldClient != nil {
+		oldClient.Close()
+	}
+	if oldConn != nil {
+		oldConn.Close()
+	}
+
+	if prevShare != "" {
+		if err := s.UseShare(prevShare); err != nil {
+			return fmt.Errorf("reconnected, but could not re-attach share %s: %v", prevShare, err)
+		}
+	}
+	return nil
 }
 
 // Host returns the connected host.

@@ -14,11 +14,13 @@ import (
 
 	"anvil/internal/dmsa"
 	"anvil/internal/smbclient"
+	"anvil/internal/track"
 	"anvil/internal/ui"
 )
 
 // printExecOutcome renders one remote-execution result in cmdExec's idiom.
-func (s *shell) printExecOutcome(out string, warnings []string, err error) {
+func (s *shell) printExecOutcome(method, cmdLine, out string, warnings []string, err error) {
+	s.trackOp(track.CategoryExec, method, cmdLine, "", err)
 	for _, w := range warnings {
 		ui.Warm.Printf("  warning: %s\n", w)
 	}
@@ -44,7 +46,8 @@ func (s *shell) cmdPSExec(cmdLine string) {
 		fmt.Printf("  %s\n", ui.Muted.Sprint("usage: psexec <command...>"))
 		return
 	}
-	s.printExecOutcome(s.sess.ExecService(cmdLine))
+	out, warnings, err := s.sess.ExecService(cmdLine)
+	s.printExecOutcome("psexec", cmdLine, out, warnings, err)
 }
 
 // cmdWMIExec runs a command via Win32_Process.Create (announces its own
@@ -54,7 +57,8 @@ func (s *shell) cmdWMIExec(cmdLine string) {
 		fmt.Printf("  %s\n", ui.Muted.Sprint("usage: wmiexec <command...>"))
 		return
 	}
-	s.printExecOutcome(s.sess.ExecWMI(cmdLine))
+	out, warnings, err := s.sess.ExecWMI(cmdLine)
+	s.printExecOutcome("wmiexec", cmdLine, out, warnings, err)
 }
 
 // cmdDCOMExec runs a command via DCOM shell objects. Needs admin; hardened
@@ -65,7 +69,8 @@ func (s *shell) cmdDCOMExec(cmdLine string) {
 		return
 	}
 	ui.Faint.Println("  opening DCOM channel")
-	s.printExecOutcome(s.sess.ExecDCOM(cmdLine))
+	out, warnings, err := s.sess.ExecDCOM(cmdLine)
+	s.printExecOutcome("dcomexec", cmdLine, out, warnings, err)
 }
 
 // cmdWMIQuery runs a WQL query against root\cimv2 and prints the result
@@ -163,6 +168,7 @@ func (s *shell) cmdDACLEdit(args []string) {
 			return
 		}
 		added, err := s.sess.WriteDACL(target, principal, rights, denied, inherit)
+		s.trackOp(track.CategoryAD, "dacledit grant", target, principal+" "+rights, err)
 		if err != nil {
 			s.opError(err)
 			return
@@ -174,6 +180,7 @@ func (s *shell) cmdDACLEdit(args []string) {
 			return
 		}
 		removed, err := s.sess.RemoveDACL(target, principal, rights)
+		s.trackOp(track.CategoryAD, "dacledit revoke", target, principal, err)
 		if err != nil {
 			s.opError(err)
 			return
@@ -221,6 +228,7 @@ func (s *shell) cmdOwnerEdit(args []string) {
 	ui.Faint.Println("  opening LDAP channel")
 	if len(args) >= 3 && strings.EqualFold(args[1], "-set") {
 		prev, err := s.sess.SetOwner(target, args[2])
+		s.trackOp(track.CategoryAD, "owneredit set", target, args[2], err)
 		if err != nil {
 			s.opError(err)
 			return
@@ -248,7 +256,9 @@ func (s *shell) cmdSAMPassword(args []string) {
 		fmt.Printf("  %s\n", ui.Muted.Sprint("usage: sampasswd <user> <newpassword> <oldpassword>"))
 		return
 	}
-	if err := s.sess.SetPasswordSAMR(args[0], args[1], args[2]); err != nil {
+	err := s.sess.SetPasswordSAMR(args[0], args[1], args[2])
+	s.trackOp(track.CategoryAD, "sampasswd", args[0], "", err)
+	if err != nil {
 		s.opError(err)
 		return
 	}
@@ -272,6 +282,7 @@ func (s *shell) cmdSAMGroup(add bool, args []string) {
 	} else {
 		err = s.sess.RemoveGroupMember(args[0], args[1])
 	}
+	s.trackOp(track.CategoryAD, verb, args[0], args[1], err)
 	if err != nil {
 		s.opError(err)
 		return

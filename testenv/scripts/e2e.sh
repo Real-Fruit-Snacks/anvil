@@ -554,6 +554,53 @@ assert_fx "lookupsid: resolves lab RID 500" "LAB\\Administrator" "$T12_OUT"
 assert_fx "badsuccessor: clean no-schema denial" "no dMSA schema" "$T12_OUT"
 assert_fx "raisechild: clean single-domain refusal" "not a child domain" "$T12_OUT"
 
+echo "== [16/16] anvil connect (slinger-concept features on Samba) =="
+# The slinger-inspired command set against the Samba lab. Reality here:
+# svc config / time / portfwd list / find / download / enumpipes / ping /
+# reconnect all WORK (stock SMB + srvsvc/svcctl paths Samba implements);
+# tasks/eventlog share the exec channel's no-atsvc denial; reg writes hit
+# Samba's winreg limits; procs gets an empty perf blob (themed). `time`
+# shows UPTIME 0s — Samba returns tod_msecs=0 (a lab quirk, not a bug).
+S16_OUT=$($ANVIL connect --host dc -u Administrator -p 'Lab!Admin#2026' -d LAB <<'EOF'
+svc config RemoteRegistry
+time
+tasks
+eventlog list
+reg set HKLM\SOFTWARE\anv-x TestVal REG_DWORD 1
+portfwd list
+procs
+use LABSHARE
+find . -name hello.txt
+download hello.txt /tmp/dl-s16.txt
+cd docs
+download note.txt /tmp/dl-s16b.txt
+cd ..
+enumpipes
+ping
+reconnect
+exit
+EOF
+)
+S16_RC=$?
+echo "$S16_OUT"
+[ "$S16_RC" -eq 0 ] && pass "slinger-cmds: session survives (exit 0)" || fail "slinger-cmds: session survives (got $S16_RC)"
+assert_fx "svc: config read works on Samba" "RemoteRegistry" "$S16_OUT"
+assert_fx "time: NetrRemoteTOD works on Samba" "TIME" "$S16_OUT"
+assert_fx "tasks: no atsvc on Samba, themed denial" "task scheduler RPC not available" "$S16_OUT"
+assert_fx "eventlog: exec channel unavailable, themed" "task scheduler RPC not available" "$S16_OUT"
+assert_fx "reg set: clean error on missing parent key" "failed: 0x00000002" "$S16_OUT"
+assert_fx "portfwd: graceful empty store" "no portfwd rules" "$S16_OUT"
+assert_fx "procs: empty perf blob themed" "performance counters not supported" "$S16_OUT"
+assert_fx "find: hello.txt on LABSHARE" "hello.txt" "$S16_OUT"
+assert_fx "download: 25 bytes pulled" "25 bytes" "$S16_OUT"
+# Regression (found on live Server 2022): download must resolve relative
+# paths against the session cwd, not the share root — the file opens on a
+# freshly mounted tree that has no cwd of its own.
+assert_fx "download: cwd-relative path (docs/note.txt)" "/tmp/dl-s16b.txt — " "$S16_OUT"
+assert_fx "enumpipes: samr categorized" "samr" "$S16_OUT"
+assert_fx "ping: session alive" "session alive" "$S16_OUT"
+assert_fx "reconnect: re-establishes" "reconnected" "$S16_OUT"
+
 END=$(date +%s)
 echo "== summary =="
 echo "passed: $PASS  failed: $FAIL  ($((END - START))s)"

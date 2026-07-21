@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"time"
 
 	"github.com/mandiant/gopacket/pkg/session"
 	"github.com/spf13/cobra"
@@ -15,16 +16,17 @@ import (
 
 func newConnectCmd() *cobra.Command {
 	var (
-		host     string
-		port     int
-		targetIP string
-		user     string
-		password string
-		domain   string
-		hashes   string
-		kerberos bool
-		dcIP     string
-		dcHost   string
+		host      string
+		port      int
+		targetIP  string
+		user      string
+		password  string
+		domain    string
+		hashes    string
+		kerberos  bool
+		dcIP      string
+		dcHost    string
+		syncClock bool
 	)
 
 	cmd := &cobra.Command{
@@ -38,6 +40,10 @@ func newConnectCmd() *cobra.Command {
 			if kerberos && net.ParseIP(host) != nil {
 				// The SPN (cifs/<host>) needs a name the KDC knows.
 				return fmt.Errorf("kerberos requires the target FQDN — pass --host <fqdn> and --target-ip %s", host)
+			}
+			if syncClock && !kerberos {
+				// The offset is applied to kerberos timestamps only.
+				return fmt.Errorf("--sync-clock only applies to kerberos — pass -k as well")
 			}
 
 			creds := &session.Credentials{
@@ -59,6 +65,22 @@ func newConnectCmd() *cobra.Command {
 				if err := session.EnsurePassword(creds); err != nil {
 					return err
 				}
+			}
+
+			if syncClock {
+				// Measure before dialing anything kerberos-related: the
+				// offset must be in place when Connect builds AP-REQs.
+				ntpTarget := dcIP
+				if ntpTarget == "" {
+					ntpTarget = host
+				}
+				offset, err := smbclient.NTPOffset(ntpTarget, flagTimeout)
+				if err != nil {
+					return fmt.Errorf("--sync-clock: %v", err)
+				}
+				smbclient.SetClockOffset(offset)
+				ui.Faint.Printf("  clock offset vs %s: %+v (applied to kerberos timestamps)\n",
+					ntpTarget, offset.Round(time.Millisecond))
 			}
 
 			sess, err := smbclient.Connect(host, port, targetIP, creds, flagTimeout, nullSession)
@@ -87,6 +109,7 @@ func newConnectCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&kerberos, "kerberos", "k", false, "use kerberos (ccache from KRB5CCNAME or <user>.ccache)")
 	cmd.Flags().StringVar(&dcIP, "dc-ip", "", "KDC address override for kerberos")
 	cmd.Flags().StringVar(&dcHost, "dc-host", "", "DC hostname override for kerberos")
+	cmd.Flags().BoolVar(&syncClock, "sync-clock", false, "query the DC's clock via NTP and offset kerberos timestamps by it (with -k; defeats clock skew on forged-ticket logons)")
 	return cmd
 }
 

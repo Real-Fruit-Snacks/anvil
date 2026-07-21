@@ -723,6 +723,23 @@ EOF
 )
 grep -qF "anvil transcript" /tmp/trans-op.txt && pass "transcript: header captured" || fail "transcript: header captured"
 grep -qF "LABSHARE" /tmp/trans-op.txt && pass "transcript: command output captured" || fail "transcript: command output captured"
+# certreq against the Samba lab: Samba runs no AD CS, and the denial
+# surfaces one step EARLIER than the pipe open — CA discovery (the
+# pKIEnrollmentService search) finds nothing in Samba's Configuration
+# NC, so "no enrollment services found" is the themed error; the
+# pipe-level denial only appears on a server whose LDAP names a CA but
+# lacks the cert pipe. The session must survive either way. Issuance
+# (baseline User cert + ESC1 SAN cert against HACKERBLUEPRINT-CA) is
+# verified manually against the Windows Server 2022 DC.
+OUT=$($ANVIL connect --host dc -u Administrator -p 'Lab!Admin#2026' -d LAB <<'EOF'
+certreq User
+exit
+EOF
+)
+RC=$?
+echo "$OUT"
+[ "$RC" -eq 0 ] && pass "certreq: session survives (exit 0)" || fail "certreq: session survives (got $RC)"
+assert_fx "certreq: no CA in Samba LDAP, themed denial" "no enrollment services found" "$OUT"
 
 END=$(date +%s)
 echo "== summary =="

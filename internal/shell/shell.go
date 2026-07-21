@@ -173,6 +173,7 @@ func (s *shell) runInteractive() int {
 		readline.PcItem("loot"),
 		readline.PcItem("whoami"),
 		readline.PcItem("trusts"),
+		readline.PcItem("certreq"),
 		readline.PcItem("ping"),
 		readline.PcItem("reconnect"),
 		readline.PcItem("exit"),
@@ -396,6 +397,8 @@ func (s *shell) dispatch(line string, args []string) (code int, done bool) {
 		s.cmdWhoAmI()
 	case "trusts":
 		s.cmdTrusts()
+	case "certreq":
+		s.cmdCertreq(rest)
 	default:
 		ui.Warm.Printf("  unknown command %q — try help\n", cmd)
 	}
@@ -467,6 +470,7 @@ func (s *shell) cmdHelp() {
 		{"loot [dir]", "show/set the loot directory for --out files"},
 		{"whoami", "session user, SID, and group memberships (LDAP + lsarpc)"},
 		{"trusts", "list domain trust relationships (LDAP)"},
+		{"certreq <template> [-san <upn>]", "request a certificate (MS-ICPR; ESC1)"},
 		{"ping", "check session liveness"},
 		{"reconnect", "re-dial and re-attach the share"},
 		{"! <cmd> | !<n>", "run a local command / re-run history entry n"},

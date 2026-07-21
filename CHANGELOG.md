@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0 — scan service probes
+
 - **scan service probes**: two more unauthenticated signals, and 80/443
   join the default port set (now 16). TLS cert harvest (636/3389/5986 —
   subject CN, issuer, SANs, expiry with expired/&lt;30-day flagging;

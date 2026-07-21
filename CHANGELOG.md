@@ -8,6 +8,29 @@
   client cwd exactly like `ls`/`get`/`find` (found during live Server
   2022 verification; e2e regression added: `cd docs` + `download
   note.txt`).
+- **scan probe selection**: `anvil scan --only smb,ldap` whitelists and
+  `--skip nullsession,krb` blacklists the phase-2 probes (`smb`, `rpc`,
+  `ldap`, `krb`, `nullsession`; both flags together are a usage error).
+  The port sweep always runs; a probe fires when its port is open and it
+  is selected.
+- **scan attack surface**: five new unauthenticated signals riding the
+  existing port set. Clock skew from the SMB2 negotiate's SystemTime
+  (hint + `--sync-clock` pointer past the 5-minute kerberos tolerance);
+  an RPC well-known-UUID table annotating the endpoint dump (SAMR,
+  LSARPC, DRSUAPI, SVCCTL, SRVSVC, WKSSVC, NETLOGON, winreg, eventlog,
+  TSCH, epmapper — every UUID verified against gopacket/impacket/MS
+  specs) with HINTS for exposed coercion interfaces (MS-RPRN PrinterBug,
+  MS-EFSR PetitPotam — both its UUIDs, MS-FSRVP ShadowCoerce, MS-DFSNM
+  DFSCoerce, MS-PAR PrintNightmare); a kerberos realm probe (one AS-REQ
+  for a random nonexistent principal — the KRB-ERROR confirms the KDC
+  and carries the realm, no lockout surface); root-DSE extras
+  (domain/forest functional levels, SASL mechanisms, forest root from
+  the schema context); and a null-session share attempt. The
+  null-session probe surfaces a gopacket quirk as signal: pkg/smb
+  hardwires RequireMessageSigning and its smb2 aborts anonymous/guest
+  sessions, so a server that ACCEPTED the null logon is reported as
+  "accepted but blocked by client signing requirement" — itself a
+  finding.
 - **Service & task management**: `svc <start|stop|config> <name>
   [disabled|demand|auto]` over SVCCTL (start/stop wait for the state
   transition; bare `config` reads start type + state) and `tasks` /

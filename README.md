@@ -47,14 +47,32 @@ anvil scan <target> [flags]
 `scan` profiles a target without credentials: TCP reachability of the AD port
 set (dns, kerberos, msrpc, ldap, smb, ldaps, gc, rdp, winrm, ...), then
 unauthenticated probes against open ports — SMB dialect/signing/OS/NTLM
-fingerprint, RPC endpoint mapper dump, and LDAP posture (signing requirement,
-LDAPS channel binding, root DSE).
+fingerprint plus the server's clock skew from the SMB2 negotiate (|skew| over
+five minutes breaks kerberos; `--sync-clock` fixes it at connect time), an
+RPC endpoint mapper dump annotated from a built-in well-known-UUID table
+(samr, lsarpc, drsuapi, svcctl, ... — with HINTS flagging exposed coercion
+interfaces: MS-RPRN PrinterBug, MS-EFSR PetitPotam, MS-FSRVP ShadowCoerce,
+MS-DFSNM DFSCoerce, MS-PAR PrintNightmare), LDAP posture (signing
+requirement, LDAPS channel binding, root DSE — naming context, domain/forest
+functional levels, SASL mechanisms, and the forest root derived from the
+schema context), a kerberos realm probe (one AS-REQ for a deliberately
+nonexistent principal; the KRB-ERROR reply confirms the KDC and carries the
+realm — no lockout surface), and a null-session attempt (anonymous share
+enumeration; a server that accepts the null logon is flagged even when
+signing stops the enumeration there).
 
 Flags:
 
 - `--ports 53,88,445` — comma-separated TCP ports (default: AD port set)
+- `--only smb,ldap` — run only these probes (`smb`, `rpc`, `ldap`, `krb`,
+  `nullsession`)
+- `--skip nullsession,krb` — run all probes except these (mutually
+  exclusive with `--only`)
 - `--timeout 3s` — per-connection timeout
 - `--json` — machine-readable output, no color
+
+The phase-1 port sweep always runs; probe selection filters phase 2 on
+top of it — a probe fires only when its port is open and it is selected.
 
 Examples:
 

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **scan service probes**: two more unauthenticated signals, and 80/443
+  join the default port set (now 16). TLS cert harvest (636/3389/5986 —
+  subject CN, issuer, SANs, expiry with expired/&lt;30-day flagging;
+  certs captured, not trust-validated) and an AD CS web-enrollment
+  check (unauth GET of `/certsrv/`: 401 + NTLM challenge = ESC8 relay
+  candidate hint, anonymous 200 called out, schemes parsed from
+  WWW-Authenticate). Both ride probe selection as `tls` and `adcs`.
+  Samba's LDAPS cert has a negative serial number, which Go's x509
+  rejects at parse time even with InsecureSkipVerify — e2e asserts the
+  themed error; the harvest itself (enterprise-CA cert on 636,
+  self-signed RDP cert on 3389) is verified manually against the
+  Windows Server 2022 DC.
+
 ## 0.4.0 — shell operations and unauthenticated attack surface
 
 The SMB shell grows an operations layer (service/task/registry control,

@@ -59,13 +59,18 @@ schema context), a kerberos realm probe (one AS-REQ for a deliberately
 nonexistent principal; the KRB-ERROR reply confirms the KDC and carries the
 realm — no lockout surface), and a null-session attempt (anonymous share
 enumeration; a server that accepts the null logon is flagged even when
-signing stops the enumeration there).
+signing stops the enumeration there). Two service probes round it out: a
+TLS certificate harvest (636/3389/5986 — subject CN, issuer, SANs, expiry;
+certs are captured, not trust-validated) and an AD CS web-enrollment check
+(an unauthenticated GET of `/certsrv/` — a 401 challenging with NTLM marks
+the ESC8 relay target; an anonymous 200 is called out too). 80/443 joined
+the default port set for this.
 
 Flags:
 
 - `--ports 53,88,445` — comma-separated TCP ports (default: AD port set)
 - `--only smb,ldap` — run only these probes (`smb`, `rpc`, `ldap`, `krb`,
-  `nullsession`)
+  `nullsession`, `tls`, `adcs`)
 - `--skip nullsession,krb` — run all probes except these (mutually
   exclusive with `--only`)
 - `--timeout 3s` — per-connection timeout

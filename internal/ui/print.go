@@ -39,6 +39,14 @@ func PrintProfile(p *scan.TargetProfile) {
 		fmt.Println()
 		printNullSession(p.NullSession)
 	}
+	if p.TLS != nil {
+		fmt.Println()
+		printTLS(p.TLS)
+	}
+	if p.ADCS != nil {
+		fmt.Println()
+		printADCS(p.ADCS)
+	}
 	if len(p.Hints) > 0 {
 		fmt.Println()
 		printHints(p.Hints)
@@ -176,10 +184,61 @@ func printHints(hints []string) {
 		if strings.Contains(h, "signing not required") ||
 			strings.Contains(h, "coercion target") ||
 			strings.Contains(h, "null session") ||
-			strings.Contains(h, "clock skew") {
+			strings.Contains(h, "clock skew") ||
+			strings.Contains(h, "ESC8") ||
+			strings.Contains(h, "ANONYMOUS") ||
+			strings.Contains(h, "expired TLS") {
 			line = Warm.Sprint(h)
 		}
 		fmt.Printf("  %s\n", line)
+	}
+}
+
+func printADCS(a *scan.ADCSInfo) {
+	Muted.Println("ADCS")
+	if a.Error != "" {
+		probeError(a.Error)
+		return
+	}
+	if !a.WebEnrollment {
+		kv("web enrollment", "not found", Faint)
+		return
+	}
+	kv("web enrollment", a.URL, Warm) // the endpoint's presence is the finding
+	if len(a.AuthSchemes) > 0 {
+		kv("auth schemes", strings.Join(a.AuthSchemes, ", "), nil)
+	} else {
+		kv("auth schemes", "none (anonymous)", Warm)
+	}
+}
+
+func printTLS(t *scan.TLSInfo) {
+	Muted.Println("TLS CERT")
+	if t.Error != "" {
+		probeError(t.Error)
+		return
+	}
+	for _, c := range t.Certs {
+		fmt.Printf("  %s %s\n", Faint.Sprintf(":%-6d", c.Port), c.SubjectCN)
+		if c.IssuerCN != "" {
+			kv("issuer", c.IssuerCN, Faint)
+		}
+		if len(c.SANs) > 0 {
+			kv("sans", strings.Join(c.SANs, ", "), Faint)
+		}
+		var col *color.Color
+		expiry := c.NotAfter.Format("2006-01-02")
+		switch {
+		case c.Expired:
+			expiry += fmt.Sprintf(" (expired %dd ago)", -c.DaysLeft)
+			col = Warm
+		case c.DaysLeft < 30:
+			expiry += fmt.Sprintf(" (%dd left)", c.DaysLeft)
+			col = Warm
+		default:
+			expiry += fmt.Sprintf(" (%dd left)", c.DaysLeft)
+		}
+		kv("expiry", expiry, col)
 	}
 }
 

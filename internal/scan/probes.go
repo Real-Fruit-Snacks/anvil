@@ -16,11 +16,13 @@ const (
 	ProbeLDAP        Probe = "ldap"
 	ProbeKerberos    Probe = "krb"
 	ProbeNullSession Probe = "nullsession"
+	ProbeTLS         Probe = "tls"
+	ProbeADCS        Probe = "adcs"
 )
 
 // AllProbes lists every selectable probe — the effective set when
 // neither --only nor --skip is given.
-var AllProbes = []Probe{ProbeSMB, ProbeRPC, ProbeLDAP, ProbeKerberos, ProbeNullSession}
+var AllProbes = []Probe{ProbeSMB, ProbeRPC, ProbeLDAP, ProbeKerberos, ProbeNullSession, ProbeTLS, ProbeADCS}
 
 // ProbeNames returns the valid probe names in display order, for help
 // and error text.

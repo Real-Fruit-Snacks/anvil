@@ -86,6 +86,39 @@ type NullSessionInfo struct {
 	SigningBlocked bool `json:"signingBlocked,omitempty"`
 }
 
+// TLSCertInfo is the leaf certificate one TLS service presents.
+type TLSCertInfo struct {
+	Port      int       `json:"port"`
+	SubjectCN string    `json:"subjectCN,omitempty"`
+	IssuerCN  string    `json:"issuerCN,omitempty"`
+	SANs      []string  `json:"sans,omitempty"`
+	NotAfter  time.Time `json:"notAfter"`
+	Expired   bool      `json:"expired,omitempty"`
+	DaysLeft  int       `json:"daysLeft"`
+}
+
+// TLSInfo is the certificate harvest across the TLS services (636, 3389,
+// 5986): one entry per open TLS port. Certificates are captured, not
+// trust-validated (self-signed/AD-internal PKI is the norm) — only
+// identity and validity dates are reported.
+type TLSInfo struct {
+	Probed bool          `json:"probed"`
+	Error  string        `json:"error,omitempty"`
+	Certs  []TLSCertInfo `json:"certs,omitempty"`
+}
+
+// ADCSInfo is the AD Certificate Services web-enrollment check: an
+// unauthenticated GET of /certsrv/ over HTTP/S. A 401 challenging with
+// NTLM means the web enrollment endpoint is present — the ESC8 relay
+// target.
+type ADCSInfo struct {
+	Probed        bool     `json:"probed"`
+	Error         string   `json:"error,omitempty"`
+	WebEnrollment bool     `json:"webEnrollment"`
+	URL           string   `json:"url,omitempty"`
+	AuthSchemes   []string `json:"authSchemes,omitempty"`
+}
+
 // TargetProfile is the assembled result of a scan run.
 type TargetProfile struct {
 	Target      string           `json:"target"`
@@ -96,5 +129,7 @@ type TargetProfile struct {
 	LDAP        *LDAPInfo        `json:"ldap,omitempty"`
 	Kerberos    *KerberosInfo    `json:"kerberos,omitempty"`
 	NullSession *NullSessionInfo `json:"nullSession,omitempty"`
+	TLS         *TLSInfo         `json:"tls,omitempty"`
+	ADCS        *ADCSInfo        `json:"adcs,omitempty"`
 	Hints       []string         `json:"hints,omitempty"`
 }

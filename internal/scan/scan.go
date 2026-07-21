@@ -84,6 +84,34 @@ func Run(target string, opts Options) *TargetProfile {
 			mu.Unlock()
 		}()
 	}
+	if opts.enabled(ProbeTLS) {
+		var tlsPorts []int
+		for _, p := range []int{636, 3389, 5986} {
+			if open(p) {
+				tlsPorts = append(tlsPorts, p)
+			}
+		}
+		if len(tlsPorts) > 0 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				info := probeTLS(target, tlsPorts, opts.Timeout)
+				mu.Lock()
+				profile.TLS = info
+				mu.Unlock()
+			}()
+		}
+	}
+	if (open(80) || open(443)) && opts.enabled(ProbeADCS) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			info := probeADCS(target, open(80), open(443), opts.Timeout)
+			mu.Lock()
+			profile.ADCS = info
+			mu.Unlock()
+		}()
+	}
 	wg.Wait()
 
 	if open(88) && opts.enabled(ProbeKerberos) {
@@ -161,6 +189,27 @@ func buildHints(p *TargetProfile, open func(int) bool) []string {
 			hints = append(hints, fmt.Sprintf("null session exposes share enumeration (%d shares)", len(p.NullSession.Shares)))
 		case p.NullSession.SigningBlocked:
 			hints = append(hints, "null session accepted by target (enumeration blocked by client signing)")
+		}
+	}
+	if p.ADCS != nil && p.ADCS.WebEnrollment {
+		ntlm := false
+		for _, s := range p.ADCS.AuthSchemes {
+			if strings.EqualFold(s, "NTLM") || strings.EqualFold(s, "Negotiate") {
+				ntlm = true
+			}
+		}
+		switch {
+		case ntlm:
+			hints = append(hints, fmt.Sprintf("ADCS web enrollment at %s (ESC8 relay candidate)", p.ADCS.URL))
+		case len(p.ADCS.AuthSchemes) == 0:
+			hints = append(hints, fmt.Sprintf("ADCS web enrollment at %s allows ANONYMOUS access", p.ADCS.URL))
+		}
+	}
+	if p.TLS != nil {
+		for _, c := range p.TLS.Certs {
+			if c.Expired {
+				hints = append(hints, fmt.Sprintf("expired TLS certificate on :%d (%s)", c.Port, c.SubjectCN))
+			}
 		}
 	}
 	return hints

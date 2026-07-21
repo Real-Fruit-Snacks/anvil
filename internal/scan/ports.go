@@ -17,10 +17,12 @@ type PortDef struct {
 // DefaultPorts is the phase-1 target set.
 var DefaultPorts = []PortDef{
 	{53, "dns"},
+	{80, "http"},
 	{88, "kerberos"},
 	{135, "msrpc"},
 	{139, "netbios-ssn"},
 	{389, "ldap"},
+	{443, "https"},
 	{445, "smb"},
 	{464, "kpasswd"},
 	{636, "ldaps"},

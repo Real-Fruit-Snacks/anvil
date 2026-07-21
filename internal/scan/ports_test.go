@@ -24,12 +24,12 @@ func TestServiceName(t *testing.T) {
 }
 
 func TestDefaultPorts(t *testing.T) {
-	if len(DefaultPorts) != 14 {
-		t.Errorf("DefaultPorts has %d entries, want 14", len(DefaultPorts))
+	if len(DefaultPorts) != 16 {
+		t.Errorf("DefaultPorts has %d entries, want 16", len(DefaultPorts))
 	}
 	want := map[int]string{
-		53: "dns", 88: "kerberos", 135: "msrpc", 139: "netbios-ssn",
-		389: "ldap", 445: "smb", 464: "kpasswd", 636: "ldaps",
+		53: "dns", 80: "http", 88: "kerberos", 135: "msrpc", 139: "netbios-ssn",
+		389: "ldap", 443: "https", 445: "smb", 464: "kpasswd", 636: "ldaps",
 		1433: "mssql", 3268: "gc", 3269: "gc-ssl", 3389: "rdp",
 		5985: "winrm", 5986: "winrm-ssl",
 	}

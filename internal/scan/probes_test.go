@@ -15,11 +15,11 @@ func TestParseProbeList(t *testing.T) {
 		{"single", "smb", []Probe{ProbeSMB}, ""},
 		{"several", "smb,ldap,krb", []Probe{ProbeSMB, ProbeLDAP, ProbeKerberos}, ""},
 		{"case and space tolerant", " SMB , Rpc ", []Probe{ProbeSMB, ProbeRPC}, ""},
-		{"all five", "smb,rpc,ldap,krb,nullsession",
-			[]Probe{ProbeSMB, ProbeRPC, ProbeLDAP, ProbeKerberos, ProbeNullSession}, ""},
+		{"all seven", "smb,rpc,ldap,krb,nullsession,tls,adcs",
+			[]Probe{ProbeSMB, ProbeRPC, ProbeLDAP, ProbeKerberos, ProbeNullSession, ProbeTLS, ProbeADCS}, ""},
 		{"duplicates collapse", "smb,smb", []Probe{ProbeSMB}, ""},
 		{"unknown name", "smb,wmi", nil, "unknown probe"},
-		{"error names valid probes", "wmi", nil, "smb, rpc, ldap, krb, nullsession"},
+		{"error names valid probes", "wmi", nil, "smb, rpc, ldap, krb, nullsession, tls, adcs"},
 		{"only commas", ",,,", nil, "no valid probes"},
 		{"empty", "", nil, "no valid probes"},
 	}
@@ -79,7 +79,7 @@ func TestSelectProbes(t *testing.T) {
 		}
 	})
 	t.Run("skip everything is a bare port sweep", func(t *testing.T) {
-		set, err := SelectProbes("", "smb,rpc,ldap,krb,nullsession")
+		set, err := SelectProbes("", "smb,rpc,ldap,krb,nullsession,tls,adcs")
 		if err != nil {
 			t.Fatal(err)
 		}

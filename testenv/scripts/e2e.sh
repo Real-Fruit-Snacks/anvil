@@ -80,6 +80,18 @@ assert_fx "scan: clock skew line" "clock skew" "$SCAN_OUT"
 # by unit tests and verified manually against the Windows Server 2022 DC
 # (whose dump is mostly bare rows).
 assert_fx "scan: NULL SESSION section renders" "NULL SESSION" "$SCAN_OUT"
+assert_re "scan: 16-port sweep (6 closed)" '6/16 closed' "$SCAN_OUT"
+# tls/adcs probes: Samba serves TLS on 636 (LDAPS), but its lab cert has
+# a negative serial number, which Go's x509 rejects at PARSE time — even
+# with InsecureSkipVerify (the parse precedes the verify decision; this
+# is the same quirk changepasswd's LDAPS fallback hits). The section
+# therefore renders the themed error on Samba; the harvest itself is
+# verified manually against the Windows Server 2022 DC (enterprise-CA
+# cert on 636, self-signed RDP cert on 3389). ADCS stays absent (no
+# 80/443 on Samba); its Windows check is /certsrv/ 404 on 80.
+assert_fx "scan: TLS CERT section on Samba (ldaps)" "TLS CERT" "$SCAN_OUT"
+assert_fx "scan: Samba cert unparseable (x509 negative serial)" "negative serial" "$SCAN_OUT"
+assert_no_fx "scan: no ADCS section on Samba" "ADCS" "$SCAN_OUT"
 
 # Probe selection: --only whitelists phase 2, --skip blacklists, both
 # together is a usage error. The phase-1 port sweep always runs.

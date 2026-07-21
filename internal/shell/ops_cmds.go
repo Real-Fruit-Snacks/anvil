@@ -9,6 +9,7 @@ package shell
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"runtime"
@@ -192,7 +193,7 @@ func (s *shell) cmdPortfwd(args []string) {
 		}
 	case "add":
 		if len(args) < 3 {
-			fmt.Printf("  %s\n", ui.Muted.Sprint("usage: portfwd add <listen host:port> <connect host:port>"))
+			fmt.Printf("  %s\n", ui.Muted.Sprint("usage: portfwd add <listen host:port> <connect host:port> [--activate]"))
 			return
 		}
 		err := s.sess.PortFwdAdd(args[1], args[2])
@@ -201,10 +202,16 @@ func (s *shell) cmdPortfwd(args []string) {
 			s.opError(err)
 			return
 		}
-		ui.Faint.Printf("  rule added: %s -> %s (active after iphlpsvc restart/reboot; persists until removed)\n", args[1], args[2])
+		ui.Faint.Printf("  rule added: %s -> %s\n", args[1], args[2])
+		if hasFlag(args[3:], "--activate") {
+			steps := s.sess.PortFwdActivate(args[2], listenPort(args[1]))
+			s.printPortFwdSteps(steps, smbclient.PortFwdFirewallRuleName(args[1]), true)
+		} else {
+			ui.Faint.Println("  (active after iphlpsvc restart/reboot; persists until removed)")
+		}
 	case "remove":
 		if len(args) < 2 {
-			fmt.Printf("  %s\n", ui.Muted.Sprint("usage: portfwd remove <listen host:port>"))
+			fmt.Printf("  %s\n", ui.Muted.Sprint("usage: portfwd remove <listen host:port> [--deactivate]"))
 			return
 		}
 		err := s.sess.PortFwdRemove(args[1])
@@ -214,6 +221,10 @@ func (s *shell) cmdPortfwd(args []string) {
 			return
 		}
 		ui.Faint.Printf("  rule removed: %s\n", args[1])
+		if hasFlag(args[2:], "--deactivate") {
+			steps := s.sess.PortFwdDeactivate(listenPort(args[1]))
+			s.printPortFwdSteps(steps, smbclient.PortFwdFirewallRuleName(args[1]), false)
+		}
 	case "clear":
 		n, err := s.sess.PortFwdClear()
 		s.trackOp(track.CategoryRegistry, "portfwd clear", "v4tov4", fmt.Sprintf("%d rules", n), err)
@@ -225,6 +236,66 @@ func (s *shell) cmdPortfwd(args []string) {
 	default:
 		fmt.Printf("  %s\n", ui.Muted.Sprint("usage: portfwd [list|add <l> <c>|remove <l>|clear]"))
 	}
+}
+
+// printPortFwdSteps renders one PortFwdActivate/Deactivate step list in
+// the portfwd contract form: one line per step, failures as warm
+// warnings that never abort the session. ruleName (anv-portfwd-<port>)
+// names the firewall rule; add selects the netsh form in the manual-fix
+// hint. Mutating hops feed the change tracker.
+func (s *shell) printPortFwdSteps(steps []smbclient.PortFwdStep, ruleName string, add bool) {
+	for _, st := range steps {
+		switch st.Name {
+		case "ipv6 check":
+			switch {
+			case st.Err != nil:
+				ui.Warm.Printf("  warning: ipv6 check failed (%v)\n", st.Err)
+			case strings.HasPrefix(st.Detail, "DisabledComponents=0xff"):
+				ui.Warm.Println("  warning: IPv6 disabled on target (DisabledComponents=0xff) — portproxy rules are inert")
+			default:
+				ui.Faint.Println("  ipv6 enabled")
+			}
+		case "firewall rule":
+			verb, hint := "add", fmt.Sprintf("netsh advfirewall firewall add rule name=\"%s\" dir=in action=allow protocol=TCP localport=%s", ruleName, strings.TrimPrefix(ruleName, "anv-portfwd-"))
+			if !add {
+				verb, hint = "delete", fmt.Sprintf("netsh advfirewall firewall delete rule name=\"%s\"", ruleName)
+			}
+			if st.Err != nil {
+				ui.Warm.Printf("  warning: firewall rule failed (%v) — %s manually: %s\n", st.Err, verb, hint)
+			} else {
+				ui.Faint.Printf("  firewall %s\n", st.Detail)
+			}
+			s.trackOp(track.CategoryExec, "firewall "+verb, ruleName, "", st.Err)
+		case "iphlpsvc restart":
+			if st.Err != nil {
+				ui.Warm.Printf("  warning: iphlpsvc restart failed (%v) — restart manually or reboot to activate\n", st.Err)
+			} else {
+				ui.Faint.Println("  iphlpsvc restarted — relay active")
+			}
+			s.trackOp(track.CategoryService, "restart", "iphlpsvc", "portfwd", st.Err)
+		}
+	}
+}
+
+// hasFlag reports whether args contains flag (case-insensitive).
+func hasFlag(args []string, flag string) bool {
+	for _, a := range args {
+		if strings.EqualFold(a, flag) {
+			return true
+		}
+	}
+	return false
+}
+
+// listenPort extracts the port from a listen host:port (a bare port is
+// accepted too); 0 on garbage — PortFwdAdd already validated the pair.
+func listenPort(listen string) int {
+	_, p, err := net.SplitHostPort(listen)
+	if err != nil {
+		p = listen
+	}
+	port, _ := strconv.Atoi(p)
+	return port
 }
 
 // cmdProcs lists processes via the registry performance hives (no WMI).

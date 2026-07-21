@@ -622,6 +622,8 @@ tasks
 eventlog list
 reg set HKLM\SOFTWARE\anv-x TestVal REG_DWORD 1
 portfwd list
+portfwd add 0.0.0.0:44999 127.0.0.1:445 --activate
+portfwd remove 0.0.0.0:44999 --deactivate
 procs
 use LABSHARE
 find . -name hello.txt
@@ -644,6 +646,21 @@ assert_fx "tasks: no atsvc on Samba, themed denial" "task scheduler RPC not avai
 assert_fx "eventlog: exec channel unavailable, themed" "task scheduler RPC not available" "$S16_OUT"
 assert_fx "reg set: clean error on missing parent key" "failed: 0x00000002" "$S16_OUT"
 assert_fx "portfwd: graceful empty store" "no portfwd rules" "$S16_OUT"
+# portfwd --activate against Samba: the registry rule write lands
+# (winreg is stock SMB), then the activation chain degrades step by
+# step without ever aborting the session — the IPv6 probe fails
+# (Samba's winreg has no Tcpip6 key), the firewall rule fails (the
+# exec channel needs atsvc — the same denial tasks/eventlog hit
+# above), and the iphlpsvc restart fails (no such service). Each
+# failure prints its own warning with the manual fix, and remove
+# --deactivate replays the firewall/iphlpsvc warnings. Full
+# activation (firewall rule + iphlpsvc restart + a live relay) is
+# verified manually against the Windows Server 2022 DC.
+assert_fx "portfwd --activate: registry rule written" "rule added: 0.0.0.0:44999 -> 127.0.0.1:445" "$S16_OUT"
+assert_fx "portfwd --activate: ipv6 probe fails on Samba (no Tcpip6 key)" "warning: ipv6 check failed" "$S16_OUT"
+assert_fx "portfwd --activate: firewall rule fails on Samba (no atsvc)" "warning: firewall rule failed" "$S16_OUT"
+assert_fx "portfwd: iphlpsvc restart fails on Samba (no such service)" "warning: iphlpsvc restart failed" "$S16_OUT"
+assert_fx "portfwd --deactivate: registry rule removed" "rule removed: 0.0.0.0:44999" "$S16_OUT"
 assert_fx "procs: empty perf blob themed" "performance counters not supported" "$S16_OUT"
 assert_fx "find: hello.txt on LABSHARE" "hello.txt" "$S16_OUT"
 assert_fx "download: 25 bytes pulled" "25 bytes" "$S16_OUT"

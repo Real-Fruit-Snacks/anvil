@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode/utf16"
 
+	"github.com/mandiant/gopacket/pkg/dcerpc"
 	"github.com/mandiant/gopacket/pkg/dcerpc/winreg"
 )
 
@@ -53,12 +54,29 @@ func (s *Session) PortFwdList() ([]PortFwdRule, error) {
 
 	info, err := winreg.BaseRegQueryInfoKey(rpc, hKey)
 	if err != nil {
+		if strings.Contains(err.Error(), "0x000006f7") {
+			// EPT_S_NOT_REGISTERED — Samba's winreg lacks
+			// BaseRegQueryInfoKey; enumerate without its count/buffer hints.
+			rules := portFwdEnumValues(rpc, hKey, 256, 16383, 1<<20)
+			return rules, nil
+		}
 		return nil, mapRegWriteError(err)
 	}
 
+	rules := portFwdEnumValues(rpc, hKey, info.Values, info.MaxValueNameLen+1, info.MaxValueDataLen)
+	return rules, nil
+}
+
+// portFwdEnumValues index-walks BaseRegEnumValue, parsing each value as a
+// portproxy rule and returning them sorted. The walk stops at the first
+// enum error (0x00000002 = no more values; an unregistered op on Samba =
+// treat what we have as the whole store). Malformed entries are skipped —
+// nothing but netsh or this tool should write there, but a bad entry must
+// not break listing the rest.
+func portFwdEnumValues(rpc *dcerpc.Client, hKey []byte, count, nameLen, dataLen uint32) []PortFwdRule {
 	var rules []PortFwdRule
-	for i := uint32(0); i < info.Values; i++ {
-		name, _, data, err := winreg.BaseRegEnumValue(rpc, hKey, i, info.MaxValueNameLen+1, info.MaxValueDataLen)
+	for i := uint32(0); i < count; i++ {
+		name, _, data, err := winreg.BaseRegEnumValue(rpc, hKey, i, nameLen, dataLen)
 		if err != nil {
 			break
 		}
@@ -74,7 +92,7 @@ func (s *Session) PortFwdList() ([]PortFwdRule, error) {
 		}
 		return rules[i].ListenPort < rules[j].ListenPort
 	})
-	return rules, nil
+	return rules
 }
 
 // PortFwdAdd installs a v4tov4 relay rule: listen and connect are

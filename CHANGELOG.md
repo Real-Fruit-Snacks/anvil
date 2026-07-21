@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **portfwd activation**: `portfwd add <listen> <connect> --activate`
+  takes a PortProxy rule live instead of waiting for a reboot: after
+  the registry write the shell checks the target's IPv6 stack over
+  winreg (`DisabledComponents` — at `0xff` portproxy rules are inert),
+  adds an inbound Windows Firewall rule named `anv-portfwd-<port>` via
+  the exec channel, and restarts iphlpsvc. Each step prints one line
+  and warns rather than aborting on failure — the firewall warning
+  carries a ready-made netsh command, the iphlpsvc one points at a
+  manual restart or reboot — and the change tracker records each hop.
+  `portfwd remove <listen> --deactivate` unwinds the chain (rule
+  removed, firewall rule deleted, iphlpsvc restarted). On Samba the
+  registry write lands but every activation step fails with a themed
+  warning — no Tcpip6 key, no atsvc on the exec channel, no iphlpsvc
+  service — and the session survives.
+
 ## 0.5.0 — scan service probes
 
 - **scan service probes**: two more unauthenticated signals, and 80/443

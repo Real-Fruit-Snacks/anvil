@@ -424,15 +424,29 @@ REG_BINARY as hex, REG_DWORD, REG_QWORD, REG_MULTI_SZ as `a|b|c`),
 `reg delvalue <key> <value>`, `reg createkey <key>` (creates missing
 parents), `reg delkey <key>` (must have no subkeys), and
 `reg search <root> <pattern> [maxdepth] [limit]` over key and value
-names. `portfwd` edits the PortProxy v4tov4
-relay store (`HKLM\SYSTEM\CurrentControlSet\Services\PortProxy\v4tov4\
-tcp`) in exactly the layout `netsh interface portproxy` writes:
-`portfwd list`, `portfwd add <listen host:port> <connect host:port>`,
-`portfwd remove <listen>`, `portfwd clear`. Rules activate after an
-iphlpsvc restart or reboot and persist until removed — the change
-tracker (below) keeps them visible. Any winreg consumer lazily starts
-the target's RemoteRegistry service if it is demand-stopped and restores
-its prior state when the shell exits.
+names. `portfwd` edits the PortProxy v4tov4 relay store
+(`HKLM\SYSTEM\CurrentControlSet\Services\PortProxy\v4tov4\tcp`) in
+exactly the layout `netsh interface portproxy` writes: `portfwd list`,
+`portfwd add <listen host:port> <connect host:port>`,
+`portfwd remove <listen>`, `portfwd clear`. Plain add/remove is
+registry-only — rules activate after an iphlpsvc restart or reboot and
+persist until removed, and the change tracker (below) keeps them
+visible. `portfwd add --activate` takes a rule live immediately: after
+the registry write it checks the target's IPv6 stack over winreg
+(`DisabledComponents`), adds an inbound Windows Firewall rule named
+`anv-portfwd-<port>` via the exec channel, and restarts iphlpsvc. Each
+step prints one line and a failure never aborts the session — the
+warning names the manual fix (a ready-made netsh command for the
+firewall step, a service restart or reboot for iphlpsvc). The IPv6
+check matters because portproxy rules are inert when IPv6 is disabled
+(`DisabledComponents=0xff`) — netsh itself won't tell you.
+`portfwd remove --deactivate` unwinds the chain: the rule is removed,
+the firewall rule deleted, iphlpsvc restarted. On Samba the registry
+write lands but every activation step fails with a themed warning (no
+Tcpip6 key, no atsvc for the exec channel, no iphlpsvc service) and
+the session carries on. Any winreg consumer lazily starts the target's
+RemoteRegistry service if it is demand-stopped and restores its prior
+state when the shell exits.
 
 `find` walks the selected share recursively (start path defaults to the
 current remote directory) with filters: `-name <glob>` or `-regex <re>`

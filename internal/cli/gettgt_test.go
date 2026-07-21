@@ -1,6 +1,9 @@
 package cli
 
 import (
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"errors"
 	"strings"
 	"testing"
@@ -81,12 +84,27 @@ func TestPlanGetTGT(t *testing.T) {
 		{
 			name:    "no credential",
 			opts:    gettgtOptions{user: "alice", domain: "lab.local"},
-			wantErr: "-p <password> or --hashes",
+			wantErr: "one credential is required",
 		},
 		{
 			name:    "both credentials rejected",
 			opts:    gettgtOptions{user: "alice", domain: "lab.local", password: "x", hashes: testNTHash},
 			wantErr: "mutually exclusive",
+		},
+		{
+			name:    "cert with password rejected",
+			opts:    gettgtOptions{user: "alice", domain: "lab.local", password: "x", cert: "x.pem"},
+			wantErr: "the certificate IS the credential",
+		},
+		{
+			name:    "cert with hashes rejected",
+			opts:    gettgtOptions{user: "alice", domain: "lab.local", hashes: testNTHash, cert: "x.pem"},
+			wantErr: "the certificate IS the credential",
+		},
+		{
+			name:    "cert missing file",
+			opts:    gettgtOptions{user: "alice", domain: "lab.local", cert: "dist/no-such.pem"},
+			wantErr: "cannot read certificate PEM",
 		},
 		{
 			name:    "non-hex NT hash",
@@ -213,4 +231,41 @@ func TestGetTGTCommandFlags(t *testing.T) {
 			t.Errorf("gettgt: --%s shorthand = %q, want %q", name, f.Shorthand, shorthand)
 		}
 	}
+}
+
+// TestUPNFromCert pins the Microsoft otherName SAN walk against the exact
+// encoding a Server 2022 CA emits (verified live): GeneralName [0] { OID
+// 1.3.6.1.4.1.311.20.2.3, [0] EXPLICIT UTF8String "user@REALM" }.
+func TestUPNFromCert(t *testing.T) {
+	oidSAN := asn1.ObjectIdentifier{2, 5, 29, 17}
+	oidUPN := asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3}
+
+	upnDER, _ := asn1.Marshal("svc-kerb@hackerblueprint.local")
+	// GeneralName [0] IMPLICIT OtherName: content = type-id OID TLV +
+	// [0] EXPLICIT UTF8String — byte-identical to the Server 2022 CA form.
+	otherNameContent := append(mustASN1(t, oidUPN), tlv0(upnDER)...)
+	sanValue, _ := asn1.Marshal([]asn1.RawValue{{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: otherNameContent}})
+
+	cert := &x509.Certificate{Extensions: []pkix.Extension{{Id: oidSAN, Value: sanValue}}}
+	if got := upnFromCert(cert); got != "svc-kerb@hackerblueprint.local" {
+		t.Errorf("upnFromCert = %q, want svc-kerb@hackerblueprint.local", got)
+	}
+	// No SAN → empty.
+	if got := upnFromCert(&x509.Certificate{}); got != "" {
+		t.Errorf("upnFromCert(no SAN) = %q, want empty", got)
+	}
+}
+
+func tlv0(b []byte) []byte {
+	out := []byte{0xA0, byte(len(b))}
+	return append(out, b...)
+}
+
+func mustASN1(t *testing.T, v interface{}) []byte {
+	t.Helper()
+	b, err := asn1.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

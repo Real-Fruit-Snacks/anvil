@@ -741,6 +741,95 @@ echo "$OUT"
 [ "$RC" -eq 0 ] && pass "certreq: session survives (exit 0)" || fail "certreq: session survives (got $RC)"
 assert_fx "certreq: no CA in Samba LDAP, themed denial" "no enrollment services found" "$OUT"
 
+# gettgt --cert (PKINIT, RFC 4556 Diffie-Hellman mode — the form
+# modern Windows KDCs accept; RSA mode gets KDC_ERR_ETYPE_NOSUPP
+# because its 3DES reply encryption is unavailable) — the ESC1
+# follow-through after certreq. Two assertions on Samba's reality:
+# 1. A missing PEM is a client-side failure: themed error, non-zero
+#    exit, before any KDC traffic.
+# 2. The PK-AS exchange itself reaches the KDC and is DENIED: Samba's
+#    Heimdal KDC has no trust anchor for any cert we can mint
+#    (provision configures no pkinit anchors — the same reason the
+#    golden/silver tickets die at the KDC in sections 7-8), so the
+#    PA-PK-AS exchange can only ever fail here. Assert the denial is
+#    clean: themed kerberos error, non-zero exit, no panic, and no
+#    ccache file left behind.
+# The fixture is a static self-signed RSA-2048 cert+key in the exact
+# certreq loot layout (CERTIFICATE block, then PKCS#8 PRIVATE KEY
+# block — no password) with a SAN otherName UPN alice@LAB.LOCAL, so
+# the client principal defaults to alice with no -u (the SAN-UPN
+# default; the CN alice is the fallback route to the same principal).
+# openssl is not available in the runner, so the PEM is embedded, not
+# generated in-script. The full cert -> TGT -> connect -k loop with a
+# certreq-issued ESC1 SAN cert (HACKERBLUEPRINT-CA) is verified
+# manually against the Windows Server 2022 DC.
+cat > /tmp/pkinit-fixture.pem <<'PEM'
+-----BEGIN CERTIFICATE-----
+MIIDATCCAemgAwIBAgIEYXZpbDANBgkqhkiG9w0BAQsFADAQMQ4wDAYDVQQDEwVh
+bGljZTAeFw0yMDAxMDEwMDAwMDBaFw00MDAxMDEwMDAwMDBaMBAxDjAMBgNVBAMT
+BWFsaWNlMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnQAYdtsu0THE
+xJINsOg0+koUPLBmUB9o+x5lRixrTKJNA2DawgGY+kNV9cJw1jnPBrUrn6isK9u9
+QWTMvB87C4r+kVh+o9xH/QDbLIEDgsWbb9bRZyb/hG09T+EyyHp6PEnsnUMPAVs9
+6QCwa5+YWDYpVZyhp62Poig+TJKrmgJBqN+WUAJ2Z3KCAf5Zh6MIfO8LX+0l9yCq
+GJZsVB5zzT0rmZjXVS0oec6p9VgZC5p9dk6xnUpJbYZcRphvSmBAABGNSnjyuDPC
+/o67e2tqe6LxBpDFnzvAekSGQo10+uhvk2v2hYMngolkWlfp6445zeCAvEAQ30BE
+5h072aAjTQIDAQABo2MwYTAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYB
+BQUHAwIwDAYDVR0TAQH/BAIwADAsBgNVHREEJTAjoCEwHwYKKwYBBAGCNxQCA6AR
+DA9hbGljZUBMQUIuTE9DQUwwDQYJKoZIhvcNAQELBQADggEBAEDegEvOqHRptlFZ
+O63XEQgCXKAMFn4kRhT4JQD5d+glRj8vOlSIgNXpukcTrnz3+hG1XkGTpmgleeUT
+tvzf8ReaP3PMc2093A4H+WbZYQsAeH7uHbvy1AYrigcLM9FeSUsrFI2bXrgN6zSL
+ZkTCNuB/PyxYzSUP/vq9ehVdmrgkLNXywznkxusGp6qWOyyiKFzUeaarzMdNfbZy
+7WE1hSDcFy081s5sCiHX9CFs9zByVEOrD2mPCbmPecVtdsHheC7dYW06vy9YVrAU
++QaDepjbRS7mpK3TwmpUWhGNrI7SjiO2q0AJ5VYXZcM6gKhM6RD3xOGXfSv9tJgX
+kmARdKo=
+-----END CERTIFICATE-----
+-----BEGIN PRIVATE KEY-----
+MIIEuwIBADANBgkqhkiG9w0BAQEFAASCBKUwggShAgEAAoIBAQCdABh22y7RMcTE
+kg2w6DT6ShQ8sGZQH2j7HmVGLGtMok0DYNrCAZj6Q1X1wnDWOc8GtSufqKwr271B
+ZMy8HzsLiv6RWH6j3Ef9ANssgQOCxZtv1tFnJv+EbT1P4TLIeno8SeydQw8BWz3p
+ALBrn5hYNilVnKGnrY+iKD5MkquaAkGo35ZQAnZncoIB/lmHowh87wtf7SX3IKoY
+lmxUHnPNPSuZmNdVLSh5zqn1WBkLmn12TrGdSklthlxGmG9KYEAAEY1KePK4M8L+
+jrt7a2p7ovEGkMWfO8B6RIZCjXT66G+Ta/aFgyeCiWRaV+nrjjnN4IC8QBDfQETm
+HTvZoCNNAgMBAAECgf8qYpYGqcKa8TvwByuSSImRSrjZVveziMdOwiwp0h5v+S+P
+WvWCe1dJIFhCBQarQrZCgI3vsbaog53rFgVIktNJTpv3sc+G6TeOXG7f0tvqG2bX
+KaeIFLj/l+me1IP+KApcI5j7cH4k0zb4OMfsRj5zgZcaw7a/sx+9FuZwcyhcmKF7
+sKQVcSX24uXnk4A1crc1sr0Gybii5xawBhl9E4LxzOENtTtU2oCrU0zw/CGxWul5
+ZlGjXvB1qDn3f4huINXGdfzVNoSDy5a3pIBoG4EtbfmeF6Qm8OSb63gJVJum5iIA
+XU8ZrvI0Y7YxCpYdoR2/4pBypACdElQ+89yQTkECgYEAwRYbzde4J7NSCJSzDGXF
+z8yH3Bz5LqkrSZ3PqTPBCEIOa33/sd/HN3nwBy96hwywcJ67pLeVk5E6UFlELjvO
+TDdkTFo55oylWJTMgjbHbgG8L/6bx7bjnfeVt25WhCULbLNtxsbRWHcnDoYDiATq
+7bQEW6Mn7bNjUqUxREVhvq0CgYEA0CfzTBYBCfy0yeYheRA/9U+y87OXSFuZUMqJ
+DyI5GIsLFGjDSK5BscQ5y+dmSpn/Sf6B9BVGjji4oMQ67IvpcxiIX9AjV7zylHxC
+OCE6JqzOtb6FkWeILjbJC5Ia3S9kh5NK4dm6D4EHt0Tnk3GUCjwHT+Vf1aONsz5D
+7eZtqyECgYAqZWZZfkJLRU5/39aopDgY9nnmVN5J5o9ArMwKBPkfjRGJfLMGJXKi
+tb2EdmJbAOhE8jWVZ1IKgtrhBZi45hzYE1mMgkswWjV8C8AT319OwkbF6wvdgETe
+TJytGCcbAN9PUN6LxN/2osMKp1ZjKWFELEDAtkRwJvFqFieJLArYSQKBgEUqAR12
+8kFvRmMPpG+lhprsMHnpYosYZIkDwybUKESPbs8JQFoWDJ4UpV+rM8H2CW18s5F2
+wErhbfd9PFb85kToEehEMHomvjO4VghwgfH32XdqJtd5nzY73fGKSoLUDIM/3dHN
+lpUwOnAa5ReI1bfQ2l0hygYioiK8vbV+q1IBAoGBAJDUFClvyP5eTNdML+D+n8Hq
+mnASURGsoxMtc1nb77xocJv5G6fXogMiEf2WJEWE5icAB+xMaWtM14Gx7nwMmfah
+HzNaKR056Uo2ti/XuvvMoFbxEZkCyw6eNfpHR1oe6mWMKbU/HZJQQj71hUZfDL9I
+LKAWgqtRXnMOiIpBGg5d
+-----END PRIVATE KEY-----
+PEM
+PKMISS_OUT=$($ANVIL gettgt --cert /tmp/does-not-exist.pem -d LAB.LOCAL --dc-ip dc 2>&1)
+PKMISS_RC=$?
+echo "$PKMISS_OUT"
+[ "$PKMISS_RC" -ne 0 ] && pass "pkinit: missing PEM exits non-zero" || fail "pkinit: missing PEM exits non-zero (got rc=0)"
+assert_re "pkinit: missing PEM fails themed" 'error: .*(cert|PEM|pem|read|open|no such file|does-not-exist)' "$PKMISS_OUT"
+rm -f /tmp/pkinit-op.ccache
+PKTGT_OUT=$($ANVIL gettgt --cert /tmp/pkinit-fixture.pem -d LAB.LOCAL --dc-ip dc -out /tmp/pkinit-op.ccache 2>&1)
+PKTGT_RC=$?
+echo "$PKTGT_OUT"
+[ "$PKTGT_RC" -ne 0 ] && pass "pkinit: Samba KDC denies the exchange (non-zero exit)" || fail "pkinit: expected KDC denial, got rc=0"
+assert_re "pkinit: themed kerberos error (no trust for our cert)" 'error: .*(KDC|KRB|kerberos|PKINIT|certificate|trust|PREAUTH)' "$PKTGT_OUT"
+if grep -qi -e panic -e goroutine <<<"$PKTGT_OUT"; then
+	fail "pkinit: panic/goroutine dump in output"
+else
+	pass "pkinit: no panic"
+fi
+[ ! -e /tmp/pkinit-op.ccache ] && pass "pkinit: no ccache written on denial" || fail "pkinit: ccache written despite denial"
+
 END=$(date +%s)
 echo "== summary =="
 echo "passed: $PASS  failed: $FAIL  ($((END - START))s)"

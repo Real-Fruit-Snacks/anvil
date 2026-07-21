@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.6.0 — operator batch and portfwd activation
+
+Day-to-day operating additions across the board: kerberos account
+discovery and spraying, offline dumps, ticket minting in-tool, ADCS and
+trust enumeration, loot/transcript plumbing, and one-command PortProxy
+tunnels.
+
 - **Operator batch**: eight additions for day-to-day engagements.
   `anvil userenum` (kerberos AS-REQ oracle — VALID / VALID_NOPREAUTH /
   INVALID / LOCKED per user, no account state touched) and `anvil spray`

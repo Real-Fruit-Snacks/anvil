@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.7.0 — the AD CS attack chain
+
+The AD Certificate Services story runs end to end in-tool: detect
+(`adenum adcs` flagging ESC1 templates), enroll (`certreq` over
+MS-ICPR, enrollee-supplied SANs included), and authenticate
+(`gettgt --cert` PKINIT → `connect -k`) — every link verified live
+against a Windows Server 2022 CA, including an ESC1-issued cert
+authenticating as a different user with no password involved.
+
 - **certreq**: certificate enrollment from the connect shell — `certreq
   <template> [-cn <name>] [-san <upn>] [-ca <host\CA-Name>] [-out
   <file.pem>]` requests a certificate from the domain's enterprise CA

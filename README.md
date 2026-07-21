@@ -141,8 +141,9 @@ category:
   `users`, `groups`, `members <group>`, `services`, `loggedon`, `time`
   (server clock and uptime), `procs` (process list without WMI),
   `enumpipes`, `lookupsid [startRID] [endRID]`,
-  `adenum [users|computers|delegation|laps]`,
-  `eventlog list|query <log>`
+  `adenum [users|computers|delegation|laps|adcs]`,
+  `eventlog list|query <log>`, `whoami` (session user, SID, and full
+  group memberships), `trusts` (domain trust relationships)
 - **Registry** (winreg): `reg query`, `reg save`, `reg set`,
   `reg delvalue`, `reg createkey`, `reg delkey`, `reg search`,
   `portfwd list|add|remove|clear` (PortProxy relay rules)
@@ -160,9 +161,16 @@ category:
   `owneredit`
 - **Ticket attacks**: `badsuccessor [enum|keys <dmsa$>]`,
   `raisechild <child-krbtgt-hash> [out]`
-- **Session**: `changes [--save] [--clear]` (write-op audit trail),
+- **Session**: `loot [dir]` (loot directory for `--out` files),
+  `changes [--save] [--clear]` (write-op audit trail),
   `ping`, `reconnect`, `! <cmd>` (local shell; `!<n>` re-runs entry n),
   `help`, `exit`/`quit`
+
+The credential-access commands (`samdump`, `lsadump`, `dcsync`,
+`ntdsdump`) and the roasting commands (`kerberoast`, `asrep`) accept
+`--out <file>`: the hashcat/secretsdump lines are written to the file in
+addition to the screen. A bare filename lands in the session loot
+directory (`loot <dir>`, default `~/.anvil/loot/<host>/`).
 
 `gpp` walks SYSVOL on the existing session for GPP XML files
 (Groups/Services/ScheduledTasks/DataSources/Printers/Drives and anything
@@ -491,6 +499,7 @@ command dispatch, so the connection is never touched concurrently.
 | `--dc-ip` | | | KDC address override for kerberos |
 | `--dc-host` | | | DC hostname override for kerberos |
 | `--sync-clock` | | | measure NTP offset vs the DC and stamp kerberos authenticators with server time (with `-k`) |
+| `--transcript` | | | record all session output to this file as well as the terminal |
 
 No credentials at all attempts a null session. Windows refuses anonymous
 SMB session setup outright (themed error, non-zero exit); Samba's lab DC
@@ -620,6 +629,46 @@ direction detected from content. All tickets in the file are converted; a
 round-tripped ccache remains fully usable with `connect -k`. Conventions
 match impacket's ticketConverter (unencrypted KRB-CRED, auth time carried
 by start time).
+
+### `anvil userenum` / `anvil spray`
+
+```
+anvil userenum -d <dns-domain> --dc-ip <ip> -u <users.txt> [--out file]
+anvil spray -d <dns-domain> --dc-ip <ip> -u <users.txt> -p <password> [--delay 2s] [--stop-on-success N]
+```
+
+Kerberos-only account discovery and password spraying — no SMB, so no
+per-failure 4625 log noise. `userenum` answers each user with one bare
+AS-REQ: VALID (pre-auth required), VALID_NOPREAUTH (roastable), INVALID,
+or LOCKED; the exchange touches no account state. `spray` tries ONE
+password against every user in the file and aborts immediately with a
+loud warning the moment any attempt returns a lockout verdict — targets
+with a lockout threshold would otherwise have accounts locked by the
+run. User files are one name per line.
+
+### `anvil gettgt`
+
+```
+anvil gettgt -u <user> -d <dns-domain> [-p <password> | --hashes <LM:NT>] [--dc-ip <ip>] [-out <path>]
+```
+
+Mints a TGT into a ccache for `connect -k`, without leaving the tool:
+the AS exchange runs over TCP/88 with RC4-HMAC keys derived from the
+password or the NT hash. Same impacket-style single-dash flags as
+`ticket`/`getst`.
+
+### Offline dumps: `anvil samdump` / `anvil lsadump` / `anvil ntdsdump`
+
+```
+anvil samdump --system <hive> --sam <hive>
+anvil lsadump --system <hive> --security <hive>
+anvil ntdsdump --system <hive> --ntds <dit>
+```
+
+The same parsers the live `connect` dumps use, run offline on hives you
+already hold (pulled by any tool). Output format is identical to the
+live path — secretsdump lines, LSA SECRETS + CACHED LOGONS sections, and
+the ESE-flush caveat note for NTDS.
 
 ## Test lab (Docker)
 

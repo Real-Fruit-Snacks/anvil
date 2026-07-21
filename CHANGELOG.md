@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **Operator batch**: eight additions for day-to-day engagements.
+  `anvil userenum` (kerberos AS-REQ oracle — VALID / VALID_NOPREAUTH /
+  INVALID / LOCKED per user, no account state touched) and `anvil spray`
+  (one password × user list over kerberos; aborts loudly on the first
+  lockout verdict so a thresholded domain can't have accounts locked by
+  the run). `anvil gettgt` mints a ccache from password or NT hash
+  (TCP/88, RC4-HMAC — no external tools for `connect -k`). Offline
+  dumps: `anvil samdump|lsadump|ntdsdump --system <hive>
+  --sam/--security/--ntds <hive>` run the live parsers on hives held
+  locally, output identical to the live path. In the shell: `whoami`
+  (session user + SID + full token groups via LDAP tokenGroups —
+  requested in a base-scope read because Samba refuses tokenGroups on a
+  subtree search — resolved to names over lsarpc), `trusts` (trustedDomain
+  enumeration with MS-ADTS direction/type/attribute rendering), `adenum
+  adcs` (certificate-template enumeration; ENROLLEE_SUPPLIES_SUBJECT
+  flagged as the ESC1 condition), `loot <dir>` + `--out <file>` on
+  samdump/lsadump/dcsync/ntdsdump/kerberoast/asrep (hashcat/secretsdump
+  lines to `~/.anvil/loot/<host>/`), and `connect --transcript <file>`
+  (tee all session output to a 0600 file, terminal stays live).
+
 - **portfwd activation**: `portfwd add <listen> <connect> --activate`
   takes a PortProxy rule live instead of waiting for a reboot: after
   the registry write the shell checks the target's IPv6 stack over

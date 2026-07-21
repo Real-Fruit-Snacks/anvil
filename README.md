@@ -1,11 +1,45 @@
 # anvil
 
-anvil is an Active Directory recon/attack CLI built on Mandiant's
+anvil is an Active Directory recon and attack CLI built on Mandiant's
 [gopacket](https://github.com/mandiant/gopacket) (Apache-2.0), a Go
-reimplementation of Impacket. SMB fingerprint packet construction is adapted
-from gopacket's `tools/DumpNTLMInfo` (Apache-2.0).
+reimplementation of Impacket. It ships as a single static binary with no
+runtime dependencies, for Windows and Linux. SMB fingerprint packet
+construction is adapted from gopacket's `tools/DumpNTLMInfo` (Apache-2.0).
 
 **For authorized security testing only.**
+
+## Features
+
+- **Unauthenticated target profiling** (`anvil scan`) — AD port sweep; SMB
+  dialect, signing, OS and NTLM fingerprint with clock-skew measurement;
+  RPC endpoint dump annotated from a well-known UUID table with coercion
+  hints (PrinterBug, PetitPotam, ShadowCoerce, DFSCoerce, PrintNightmare);
+  LDAP signing and channel-binding posture; kerberos realm probe;
+  null-session share check; TLS certificate harvest; AD CS web-enrollment
+  (ESC8) detection. Probes are individually selectable (`--only`/`--skip`)
+  and output is available as JSON.
+- **Authenticated SMB shell** (`anvil connect`) — one persistent session for
+  file management (including filtered search and resumable downloads),
+  enumeration (users, groups, sessions, services, processes, named pipes,
+  event logs), service and scheduled-task control, and remote registry
+  read/write — with a write-op audit trail and session keepalive/reconnect.
+- **Credential access** — SAM and LSA hive dumps, offline NTDS.dit
+  extraction (VSS), DCSync over DRSUAPI, DPAPI Credential Manager
+  decryption, GPP cpassword recovery. Hives are downloaded, decrypted
+  locally, and cleaned up on both sides.
+- **Kerberos** — kerberoast, AS-REP roast, golden/silver ticket forging
+  (`anvil ticket`), S4U2Self + S4U2Proxy impersonation (`anvil getst`),
+  ccache/kirbi inspection and conversion (`anvil describe`, `anvil
+  convert`), and clock-skew correction for ccache auth (`--sync-clock`).
+- **Remote execution** — four methods (Task Scheduler, temporary Windows
+  service, WMI, DCOM shell objects) sharing one readback-and-verified-
+  cleanup pattern.
+- **AD write primitives** — machine accounts, RBCD, DACL and owner editing,
+  password reset/change (LDAP and SAMR), group membership, registry writes,
+  PortProxy relay rules.
+- **Verified against real AD** — the full feature matrix is exercised
+  against a live Windows Server 2022 DC; Samba-vs-Windows protocol
+  differences are documented in this README and in source comments.
 
 ## Requirements
 
@@ -618,3 +652,13 @@ The DC also publishes SMB/LDAP on host ports `4445`/`4389` for manual
 poking, e.g. `anvil connect --host 127.0.0.1 --port 4445 -u alice -p
 'AlicePass#2026' -d LAB`. (`anvil scan` probes fixed service ports, so
 scan the lab from inside Docker — that's what `make e2e` does.)
+
+## License
+
+anvil is released under the terms of its [LICENSE](LICENSE); see
+[NOTICE](NOTICE) for third-party attribution, including the gopacket
+project (Apache-2.0) this tool is built on.
+
+**For authorized security testing only.** Use of this tool against systems
+without explicit permission is illegal in most jurisdictions. The authors
+assume no liability for misuse.

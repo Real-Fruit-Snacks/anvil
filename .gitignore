@@ -3,3 +3,4 @@
 /dist/
 *.syso
 testenv/bin/
+docs/superpowers/

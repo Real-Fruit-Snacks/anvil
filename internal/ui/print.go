@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/fatih/color"
 
@@ -26,9 +27,17 @@ func PrintProfile(p *scan.TargetProfile) {
 		fmt.Println()
 		printLDAP(p.LDAP)
 	}
+	if p.Kerberos != nil {
+		fmt.Println()
+		printKerberos(p.Kerberos)
+	}
 	if p.RPC != nil {
 		fmt.Println()
 		printRPC(p.RPC)
+	}
+	if p.NullSession != nil {
+		fmt.Println()
+		printNullSession(p.NullSession)
 	}
 	if len(p.Hints) > 0 {
 		fmt.Println()
@@ -82,6 +91,18 @@ func printSMB(s *scan.SMBInfo) {
 	if s.DNSDomain != "" {
 		kv("dns domain", s.DNSDomain, AccentAlt)
 	}
+	if s.SkewSeconds != nil {
+		skew := time.Duration(*s.SkewSeconds) * time.Second
+		text := "+" + skew.String()
+		if skew < 0 {
+			text = skew.String() // carries its own '-'
+		}
+		var c *color.Color
+		if *s.SkewSeconds > 300 || *s.SkewSeconds < -300 {
+			c = Warm // past the kerberos 5-minute tolerance
+		}
+		kv("clock skew", text, c)
+	}
 }
 
 func printLDAP(l *scan.LDAPInfo) {
@@ -112,6 +133,18 @@ func printLDAP(l *scan.LDAPInfo) {
 	if l.DCFunctionality != "" {
 		kv("dc func level", l.DCFunctionality, nil)
 	}
+	if l.DomainFunctionality != "" {
+		kv("domain func", l.DomainFunctionality, nil)
+	}
+	if l.ForestFunctionality != "" {
+		kv("forest func", l.ForestFunctionality, nil)
+	}
+	if l.ForestRoot != "" {
+		kv("forest root", l.ForestRoot, AccentAlt)
+	}
+	if len(l.SASLMechanisms) > 0 {
+		kv("sasl", strings.Join(l.SASLMechanisms, ", "), Faint)
+	}
 	if l.DNSHostName != "" {
 		kv("dns host", l.DNSHostName, AccentAlt)
 	}
@@ -140,10 +173,45 @@ func printHints(hints []string) {
 	Muted.Println("HINTS")
 	for _, h := range hints {
 		line := h
-		if strings.Contains(h, "signing not required") {
+		if strings.Contains(h, "signing not required") ||
+			strings.Contains(h, "coercion target") ||
+			strings.Contains(h, "null session") ||
+			strings.Contains(h, "clock skew") {
 			line = Warm.Sprint(h)
 		}
 		fmt.Printf("  %s\n", line)
+	}
+}
+
+func printKerberos(k *scan.KerberosInfo) {
+	Muted.Println("KERBEROS")
+	if k.Error != "" {
+		probeError(k.Error)
+		return
+	}
+	if k.Realm != "" {
+		kv("realm", k.Realm, AccentAlt)
+	}
+	if k.KDCReply != "" {
+		kv("kdc reply", k.KDCReply, nil)
+	}
+}
+
+// printNullSession renders the anonymous-share attempt. Refusal is the
+// expected posture on modern Windows, so it prints faint rather than as
+// an error; accepted-or-enumerated are the findings worth color.
+func printNullSession(n *scan.NullSessionInfo) {
+	Muted.Println("NULL SESSION")
+	switch {
+	case n.SigningBlocked:
+		kv("status", "accepted (enumeration blocked by client signing)", Warm)
+	case n.Error != "":
+		kv("status", n.Error, Faint)
+	case n.Shares != nil:
+		for _, sh := range n.Shares {
+			fmt.Printf("  %s\n", sh)
+		}
+		Faint.Printf("  %d shares\n", len(n.Shares))
 	}
 }
 

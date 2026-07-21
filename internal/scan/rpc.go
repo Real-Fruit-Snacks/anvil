@@ -43,10 +43,22 @@ func probeRPC(target string, port int, timeout time.Duration) *RPCInfo {
 	}
 
 	for _, ep := range eps {
+		annotation := ep.Annotation
+		if annotation == "" {
+			// The ept_entry_t annotation is server-supplied and most
+			// endpoints leave it empty (Samba annotates almost nothing;
+			// Windows annotates only a few, e.g. "Spooler function
+			// endpoint"). Fall back to the well-known UUID dictionary so
+			// the AD-relevant interfaces are still named — but never
+			// replace an annotation the EPM itself returned.
+			if a, ok := UUIDAnnotation(ep.UUID); ok {
+				annotation = a
+			}
+		}
 		info.Endpoints = append(info.Endpoints, Endpoint{
 			UUID:       ep.UUID,
 			Version:    ep.Version,
-			Annotation: ep.Annotation,
+			Annotation: annotation,
 			Protocol:   ep.Protocol,
 			Provider:   ep.Provider,
 			Bindings:   ep.Bindings,

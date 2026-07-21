@@ -151,3 +151,51 @@ func TestParseNTLMChallengeShort(t *testing.T) {
 		t.Error("short message should yield no fields")
 	}
 }
+
+func TestFiletimeToUnix(t *testing.T) {
+	cases := []struct {
+		name string
+		ft   uint64
+		want int64
+	}{
+		// FILETIME epoch (1601-01-01) maps to the negative Unix offset.
+		{"zero FILETIME", 0, -11644473600},
+		// Exact Unix epoch boundary: 11644473600 seconds of 100-ns ticks.
+		{"unix epoch boundary", 116444736000000000, 0},
+		// 2026-01-01T00:00:00Z = unix 1767225600.
+		{"known 2026 date", 134116992000000000, 1767225600},
+		// Sub-second ticks are truncated, not rounded.
+		{"sub-second ticks dropped", 116444736000000000 + 9999999, 0},
+	}
+	for _, c := range cases {
+		if got := filetimeToUnix(c.ft); got != c.want {
+			t.Errorf("%s: filetimeToUnix(%d) = %d, want %d", c.name, c.ft, got, c.want)
+		}
+	}
+}
+
+func TestSMB2NegotiateSystemTime(t *testing.T) {
+	// 64-byte SMB2 header + 65-byte negotiate response body; SystemTime is
+	// the FILETIME at body offset 40 (absolute offset 104), after
+	// MaxReadSize (body 32) and MaxWriteSize (body 36). The Max* sizes get
+	// sentinel values so reading SystemTime from the wrong offset fails.
+	buf := make([]byte, 64+65)
+	binary.LittleEndian.PutUint32(buf[64+32:64+36], 0x00800000)
+	binary.LittleEndian.PutUint32(buf[64+36:64+40], 0x00800000)
+	binary.LittleEndian.PutUint64(buf[104:112], 134116992000000000)
+
+	ft, err := smb2NegotiateSystemTime(buf)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if ft != 134116992000000000 {
+		t.Errorf("SystemTime = %d, want 134116992000000000", ft)
+	}
+
+	// Short buffers must error, not panic.
+	for _, n := range []int{0, 63, 64, 96, 104, 111} {
+		if _, err := smb2NegotiateSystemTime(buf[:n]); err == nil {
+			t.Errorf("short buffer (%d bytes): expected error", n)
+		}
+	}
+}

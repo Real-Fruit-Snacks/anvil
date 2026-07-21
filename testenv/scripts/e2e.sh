@@ -30,6 +30,11 @@ assert_fxi() {
 	if grep -qiF -- "$2" <<<"$3"; then pass "$1"; else fail "$1 (missing: '$2')"; fi
 }
 
+# assert_no_fx <desc> <fixed-string> <haystack> (must be ABSENT)
+assert_no_fx() {
+	if grep -qF -- "$2" <<<"$3"; then fail "$1 (unexpected: '$2')"; else pass "$1"; fi
+}
+
 START=$(date +%s)
 
 echo "== [1/14] readiness: waiting for dc:445 and dc:389 (max 180s) =="
@@ -59,11 +64,48 @@ assert_fx "scan: SMB section signing" "signing" "$SCAN_OUT"
 assert_re "scan: LDAP naming ctx" 'naming ctx.*DC=lab,DC=local' "$SCAN_OUT"
 assert_fxi "scan: HINTS domain controller" "domain controller" "$SCAN_OUT"
 assert_fx "scan: RPC endpoints line" "endpoints" "$SCAN_OUT"
+# Attack-surface probes (2026-07 batch). Samba's KDC answers the AS-REQ
+# probe with KRB-ERROR carrying realm LAB.LOCAL; the SMB2 negotiate
+# carries SystemTime; the UUID table annotates the samr/lsarpc rows
+# Samba's EPM dump leaves bare; the DSE extras + null-session section
+# render on any LDAP/SMB host. Coercion hints (MS-RPRN/EFSR/PAR) are
+# verified manually against the Windows Server 2022 DC — Samba's EPM
+# registrations don't reliably include the coercion interfaces.
+assert_fx "scan: KERBEROS section" "KERBEROS" "$SCAN_OUT"
+assert_re "scan: KERBEROS realm from KRB-ERROR" 'realm +lab\.local' "$SCAN_OUT"
+assert_fx "scan: clock skew line" "clock skew" "$SCAN_OUT"
+# The UUID annotation fallback is NOT asserted here: Samba annotates every
+# EPM row itself (samr, lsarpc, ...), and the table only fills BARE rows by
+# design — Samba produces none. The fallback + coercion hints are covered
+# by unit tests and verified manually against the Windows Server 2022 DC
+# (whose dump is mostly bare rows).
+assert_fx "scan: NULL SESSION section renders" "NULL SESSION" "$SCAN_OUT"
+
+# Probe selection: --only whitelists phase 2, --skip blacklists, both
+# together is a usage error. The phase-1 port sweep always runs.
+ONLY_OUT=$($ANVIL scan dc --only smb 2>&1)
+echo "$ONLY_OUT"
+assert_fx "scan --only smb: SMB section renders" "SMB" "$ONLY_OUT"
+assert_no_fx "scan --only smb: no LDAP section" "LDAP" "$ONLY_OUT"
+assert_no_fx "scan --only smb: no KERBEROS section" "KERBEROS" "$ONLY_OUT"
+assert_no_fx "scan --only smb: no RPC section" "RPC  135/tcp" "$ONLY_OUT"
+assert_no_fx "scan --only smb: no NULL SESSION section" "NULL SESSION" "$ONLY_OUT"
+SKIP_OUT=$($ANVIL scan dc --skip nullsession 2>&1)
+assert_no_fx "scan --skip nullsession: no NULL SESSION" "NULL SESSION" "$SKIP_OUT"
+assert_fx "scan --skip nullsession: SMB still renders" "SMB" "$SKIP_OUT"
+assert_fx "scan --skip nullsession: KERBEROS still renders" "KERBEROS" "$SKIP_OUT"
+BOTH_OUT=$($ANVIL scan dc --only smb --skip krb 2>&1)
+BOTH_RC=$?
+[ "$BOTH_RC" -ne 0 ] && pass "scan both flags: non-zero exit" || fail "scan both flags: exit 0"
+assert_fx "scan both flags: usage error message" "cannot be used together" "$BOTH_OUT"
 
 echo "== [3/14] anvil scan dc --json =="
 JSON_OUT=$($ANVIL scan dc --json 2>&1)
 assert_fx "scan --json: target" '"target": "dc"' "$JSON_OUT"
 assert_fx "scan --json: dialect key" '"dialect"' "$JSON_OUT"
+assert_fx "scan --json: kerberos key" '"kerberos"' "$JSON_OUT"
+assert_fx "scan --json: nullSession key" '"nullSession"' "$JSON_OUT"
+assert_fx "scan --json: clock skew key" '"clockSkewSeconds"' "$JSON_OUT"
 
 echo "== [4/14] anvil connect (password) =="
 CONN_OUT=$($ANVIL connect --host dc -u alice -p 'AlicePass#2026' -d LAB <<'EOF'

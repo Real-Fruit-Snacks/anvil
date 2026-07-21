@@ -13,7 +13,7 @@ import (
 )
 
 func newScanCmd() *cobra.Command {
-	var portsFlag string
+	var portsFlag, onlyFlag, skipFlag string
 
 	cmd := &cobra.Command{
 		Use:   "scan <target>",
@@ -26,10 +26,15 @@ func newScanCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			probes, err := scan.SelectProbes(onlyFlag, skipFlag)
+			if err != nil {
+				return err
+			}
 
 			profile := scan.Run(target, scan.Options{
 				Ports:   defs,
 				Timeout: flagTimeout,
+				Probes:  probes,
 			})
 
 			if flagJSON {
@@ -47,6 +52,8 @@ func newScanCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&portsFlag, "ports", "", "comma-separated TCP ports to probe (default: AD port set)")
+	cmd.Flags().StringVar(&onlyFlag, "only", "", "run only these probes ("+strings.Join(scan.ProbeNames(), ", ")+")")
+	cmd.Flags().StringVar(&skipFlag, "skip", "", "run all probes except these (same names as --only)")
 	return cmd
 }
 

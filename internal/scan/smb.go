@@ -82,6 +82,17 @@ func probeSMB(target string, port int, timeout time.Duration) *SMBInfo {
 			return info
 		}
 
+		// Server clock from the FIRST successful negotiate: the NEGOTIATE
+		// response carries SystemTime (a FILETIME at body offset 40,
+		// MS-SMB2 2.2.4) even in the wildcard-dialect (0x02FF) reply, so
+		// this also covers servers that need the SMB2 re-negotiate below.
+		// Skew is measured against the local clock at receipt; a truncated
+		// response just leaves SkewSeconds nil.
+		if ft, err := smb2NegotiateSystemTime(resp); err == nil {
+			skew := filetimeToUnix(ft) - time.Now().Unix()
+			info.SkewSeconds = &skew
+		}
+
 		// Wildcard dialect: redo the negotiate as real SMB2 on a fresh
 		// connection, offering up to SMB 3.1.1.
 		if dialect == smb2DialectWild {
@@ -475,6 +486,27 @@ func parseSMB2NegotiateResponse(data []byte) (dialect, securityMode uint16, err 
 	securityMode = binary.LittleEndian.Uint16(negoResp[2:4])
 	dialect = binary.LittleEndian.Uint16(negoResp[4:6])
 	return dialect, securityMode, nil
+}
+
+// smb2NegotiateSystemTime extracts the SystemTime field from an SMB2
+// NEGOTIATE response. The body follows the 64-byte SMB2 header; SystemTime
+// is an 8-byte Windows FILETIME at body offset 40 (MS-SMB2 2.2.4), right
+// after MaxWriteSize — body: StructureSize(2) SecurityMode(2)
+// DialectRevision(2) NegotiateContextCount(2) ServerGuid(16) Capabilities(4)
+// MaxTransactSize(4) MaxReadSize(4) MaxWriteSize(4) SystemTime(8).
+func smb2NegotiateSystemTime(data []byte) (uint64, error) {
+	if len(data) < 64+48 {
+		return 0, fmt.Errorf("SMB2 response too short for SystemTime")
+	}
+	return binary.LittleEndian.Uint64(data[64+40 : 64+48]), nil
+}
+
+// filetimeToUnix converts a Windows FILETIME (100-nanosecond ticks since
+// 1601-01-01 UTC) to Unix epoch seconds. Sub-second precision is dropped:
+// clock skew is only actionable at second granularity (kerberos' 5-minute
+// tolerance), and the SMB2 SystemTime field is second-granular in practice.
+func filetimeToUnix(ft uint64) int64 {
+	return int64(ft/10_000_000) - 11644473600
 }
 
 func parseSMB1SecurityMode(data []byte) (uint8, error) {

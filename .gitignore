@@ -1,6 +1,26 @@
-/anvil
-/anvil.exe
-/dist/
+# Whitelist policy: everything is ignored unless explicitly allowed.
+# Additions to the repo root must be opted in here.
+*
+!.gitignore
+!.github/
+!.github/**
+!CHANGELOG.md
+!LICENSE
+!Makefile
+!NOTICE
+!README.md
+!anvil.manifest
+!cmd/
+!cmd/**
+!docker-compose.yml
+!go.mod
+!go.sum
+!internal/
+!internal/**
+!testenv/
+!testenv/**
+!versioninfo.json
+
+# Build artifacts inside allowed trees.
 *.syso
 testenv/bin/
-docs/superpowers/

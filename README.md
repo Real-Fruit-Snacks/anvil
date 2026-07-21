@@ -128,52 +128,41 @@ anvil connect --host <ip|hostname> [flags]
 ```
 
 Opens an authenticated SMB session and drops into an interactive shell —
-one connection stays open for the whole session. Shell commands: `help`,
-`shares` (with per-share access, see below), `use <share>`, `ls [path]`,
-`cd <path>`, `pwd`, `get <remote> [local]`, `put <local> [remote]`,
-`rm <path>`, `mkdir <path>`,
-`rmdir <path>`, `rename <old> <new>`, `cat <path>` (files up to 8 MiB;
-use `get` for larger), `sessions` (active sessions via srvsvc
-NetrSessionEnum), `users` (domain users via SAMR), `groups` (domain
-groups via SAMR), `members <group>` (members of a domain group),
-`services` (Windows services via SVCCTL, admin on the target required),
-`loggedon` (interactively logged-on users via wkssvc NetrWkstaUserEnum),
-`reg query <HIVE\path> [/v name]` (remote registry read via WINREG),
-`reg save <HIVE\path> <remote-file>` (export a key/hive to a file on the
-target via BaseRegSaveKey), `samdump` (extract local account NT/LM hashes,
-secretsdump-style), `lsadump` (extract LSA secrets + cached domain logons /
-MSCashV2), `dcsync` (replicate domain user hashes from NTDS via DRSUAPI),
-`ntdsdump` (offline domain hash dump from NTDS.dit via VSS shadow copy),
-`dpapi` (decrypt Credential Manager secrets with LSA masterkeys),
-`kerberoast` (request crackable RC4 service tickets for SPN users),
-`asrep` (request crackable AS-REPs for users with "Do not require Kerberos
-preauthentication" set),
-`adenum [users|computers|delegation|laps]` (AD enumeration via LDAP, see
-below), `addcomputer <name> [-pass x]` / `delcomputer <name>` (create and
-delete machine accounts), `changepasswd <user> <new> [old]` (reset/change
-an AD user's password), `rbcd get|set|clear` (read/grant/clear
-Resource-Based Constrained Delegation on a computer), `gpp` (find and
-decrypt Group Policy Preferences cpasswords in SYSVOL), `exec <command...>`
-(run a command via Task Scheduler), `psexec <command...>` (via a temporary
-Windows service), `wmiexec <command...>` / `wmiquery <WQL>` (via WMI/DCOM),
-`dcomexec <command...>` (via DCOM shell objects), `dacledit` / `owneredit`
-(read and edit AD object ACLs), `sampasswd <user> <new> <old>` (change a
-password via SAMR, no LDAP), `samadd` / `samdel <group> <user>` (edit group
-membership via SAMR), `lookupsid [startRID] [endRID]` (LSA SID brute-force
-enumeration), `badsuccessor [enum|keys <dmsa$>]` (dMSA abuse, Server 2025
-DCs), `raisechild <child-krbtgt-hash> [out]` (child→forest-root golden
-ticket via SIDHistory), `svc <start|stop|config> <name> [type]` (control
-Windows services), `tasks` / `taskshow` / `taskrun` / `taskdel` (manage
-scheduled tasks), `time` (server clock and uptime), `reg set` /
-`reg delvalue` / `reg createkey` / `reg delkey` / `reg search` (registry
-writes and search), `portfwd list|add|remove|clear` (PortProxy relay
-rules), `procs` (process list without WMI), `find [start] [filters]`
-(recursive share search), `download <remote> <local> [--resume]`
-(resumable download), `eventlog list|query <log>` (read event logs),
-`enumpipes` (named-pipe enumeration), `changes [--save] [--clear]`
-(write-op audit trail), `ping` / `reconnect` (session liveness and
-re-dial), `! <cmd>` (local shell escape; `!<n>` re-runs history entry n),
-`exit`/`quit`.
+one connection stays open for the whole session. Shell commands, by
+category:
+
+- **Files**: `use <share>`, `ls [path]`, `cd <path>`, `pwd`,
+  `get <remote> [local]`,
+  `put <local> [remote]`, `rm <path>`, `mkdir <path>`, `rmdir <path>`,
+  `rename <old> <new>`, `cat <path>` (up to 8 MiB; use `get` for
+  larger), `find [start] [filters]` (recursive search),
+  `download <remote> <local> [--resume]` (resumable)
+- **Enumeration**: `shares` (per-share access, see below), `sessions`,
+  `users`, `groups`, `members <group>`, `services`, `loggedon`, `time`
+  (server clock and uptime), `procs` (process list without WMI),
+  `enumpipes`, `lookupsid [startRID] [endRID]`,
+  `adenum [users|computers|delegation|laps]`,
+  `eventlog list|query <log>`
+- **Registry** (winreg): `reg query`, `reg save`, `reg set`,
+  `reg delvalue`, `reg createkey`, `reg delkey`, `reg search`,
+  `portfwd list|add|remove|clear` (PortProxy relay rules)
+- **Services & tasks**: `svc <start|stop|config> <name> [type]`,
+  `tasks`, `taskshow`, `taskrun`, `taskdel`
+- **Credential access**: `samdump`, `lsadump`, `dcsync`, `ntdsdump`,
+  `dpapi`, `gpp`
+- **Roasting**: `kerberoast`, `asrep`
+- **Execution**: `exec` (Task Scheduler), `psexec` (temporary service),
+  `wmiexec` / `wmiquery <WQL>` (WMI/DCOM), `dcomexec` (DCOM shell
+  objects)
+- **AD writes**: `addcomputer <name> [-pass x]` / `delcomputer <name>`,
+  `changepasswd <user> <new> [old]`, `sampasswd <user> <new> <old>`,
+  `samadd` / `samdel <group> <user>`, `rbcd get|set|clear`, `dacledit`,
+  `owneredit`
+- **Ticket attacks**: `badsuccessor [enum|keys <dmsa$>]`,
+  `raisechild <child-krbtgt-hash> [out]`
+- **Session**: `changes [--save] [--clear]` (write-op audit trail),
+  `ping`, `reconnect`, `! <cmd>` (local shell; `!<n>` re-runs entry n),
+  `help`, `exit`/`quit`
 
 `gpp` walks SYSVOL on the existing session for GPP XML files
 (Groups/Services/ScheduledTasks/DataSources/Printers/Drives and anything

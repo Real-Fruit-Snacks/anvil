@@ -16,6 +16,25 @@
   HACKERBLUEPRINT-CA) is verified manually against the Windows Server
   2022 CA.
 
+- **PKINIT**: `anvil gettgt --cert <file.pem> [-u <user>] -d <domain>
+  [--dc-ip <ip>] [-out <ccache>]` turns an issued client certificate
+  into a TGT via the RFC 4556 PA-PK-AS exchange (Diffie-Hellman mode
+  — the form modern Windows KDCs accept; RSA mode is refused because
+  its 3DES reply encryption is unavailable, confirmed live with
+  KDC_ERR_ETYPE_NOSUPP): the AS-REQ is signed with the certificate's
+  key inside a hand-rolled minimal CMS SignedData — no new
+  dependencies. Input is the certreq loot PEM (issued cert + PKCS#8
+  key, no password); the client principal defaults to the cert's SAN
+  UPN, else the subject CN, with `-u` overriding. Cert/PEM problems
+  and KDC denials are themed; the ccache lands through the existing
+  gettgt save path. The ESC1 chain is now end-to-end in-tool:
+  `adenum adcs` → `certreq -san` → `gettgt --cert` → `connect -k`.
+  Samba's KDC trusts no cert we can mint, so e2e asserts the clean
+  denial (themed error, non-zero exit, no ccache); the full
+  cert→TGT→`connect -k` loop is verified manually against the Windows
+  Server 2022 DC with a certreq-issued cert — including an ESC1 SAN
+  cert authenticating as a different user without its password.
+
 ## 0.6.0 — operator batch and portfwd activation
 
 Day-to-day operating additions across the board: kerberos account

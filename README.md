@@ -674,12 +674,27 @@ run. User files are one name per line.
 
 ```
 anvil gettgt -u <user> -d <dns-domain> [-p <password> | --hashes <LM:NT>] [--dc-ip <ip>] [-out <path>]
+anvil gettgt --cert <pem> [-u <user>] -d <dns-domain> [--dc-ip <ip>] [-out <path>]
 ```
 
 Mints a TGT into a ccache for `connect -k`, without leaving the tool:
 the AS exchange runs over TCP/88 with RC4-HMAC keys derived from the
 password or the NT hash. Same impacket-style single-dash flags as
 `ticket`/`getst`.
+
+With `--cert <pem>` the exchange is PKINIT (RFC 4556, Diffie-Hellman
+mode — the form modern Windows KDCs accept; RSA mode is rejected on
+hardened KDCs because its 3DES reply encryption is unavailable): the
+file holds an issued client certificate and its RSA private key as one
+PEM — exactly the layout `certreq -out` writes, with no password and
+no PKCS#12 conversion needed. The client principal defaults to the
+certificate's SAN UPN, else the subject CN; `-u` overrides. This is
+the ESC1 follow-through kept in-tool: `adenum adcs` flags a vulnerable
+template, `certreq <template> -san victim@corp.local` gets the cert
+issued, `gettgt --cert` turns it into a TGT, and `connect -k` rides
+the resulting ccache. A KDC with no trust for the certificate denies
+the exchange with a themed error and writes no ccache (Samba's lab KDC
+always does — e2e asserts that denial).
 
 ### Offline dumps: `anvil samdump` / `anvil lsadump` / `anvil ntdsdump`
 

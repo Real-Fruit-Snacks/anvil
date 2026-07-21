@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.4.0 — shell operations and unauthenticated attack surface
+
+The SMB shell grows an operations layer (service/task/registry control,
+resumable downloads, event logs, session resilience and a write-op audit
+trail), and `scan` learns five attack-surface probes plus per-probe
+selection.
+
 - **download cwd fix**: `download` resolved relative remote paths against
   the share root instead of the session's current directory — a `cd`
   followed by `download file.txt` missed the file. It now joins the

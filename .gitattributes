@@ -1,0 +1,6 @@
+# Normalize all text files to LF on checkout, on every platform.
+# The CI gofmt check runs on windows-latest, where a default
+# autocrlf=true checkout converts LF to CRLF and gofmt then flags
+# every file as unformatted. Pinning eol=lf keeps checkout LF
+# everywhere.
+* text=auto eol=lf

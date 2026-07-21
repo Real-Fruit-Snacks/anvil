@@ -1,6 +1,7 @@
 # Whitelist policy: everything is ignored unless explicitly allowed.
 # Additions to the repo root must be opted in here.
 *
+!.gitattributes
 !.gitignore
 !.github/
 !.github/**

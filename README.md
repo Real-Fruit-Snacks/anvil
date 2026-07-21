@@ -105,7 +105,18 @@ password via SAMR, no LDAP), `samadd` / `samdel <group> <user>` (edit group
 membership via SAMR), `lookupsid [startRID] [endRID]` (LSA SID brute-force
 enumeration), `badsuccessor [enum|keys <dmsa$>]` (dMSA abuse, Server 2025
 DCs), `raisechild <child-krbtgt-hash> [out]` (child→forest-root golden
-ticket via SIDHistory), `exit`/`quit`.
+ticket via SIDHistory), `svc <start|stop|config> <name> [type]` (control
+Windows services), `tasks` / `taskshow` / `taskrun` / `taskdel` (manage
+scheduled tasks), `time` (server clock and uptime), `reg set` /
+`reg delvalue` / `reg createkey` / `reg delkey` / `reg search` (registry
+writes and search), `portfwd list|add|remove|clear` (PortProxy relay
+rules), `procs` (process list without WMI), `find [start] [filters]`
+(recursive share search), `download <remote> <local> [--resume]`
+(resumable download), `eventlog list|query <log>` (read event logs),
+`enumpipes` (named-pipe enumeration), `changes [--save] [--clear]`
+(write-op audit trail), `ping` / `reconnect` (session liveness and
+re-dial), `! <cmd>` (local shell escape; `!<n>` re-runs history entry n),
+`exit`/`quit`.
 
 `gpp` walks SYSVOL on the existing session for GPP XML files
 (Groups/Services/ScheduledTasks/DataSources/Printers/Drives and anything
@@ -337,6 +348,74 @@ included. `wmiquery <WQL>` runs WQL against `root\cimv2` over the same WMI
 channel and prints a table (e.g. `wmiquery SELECT Name, State FROM
 Win32_Service`).
 
+`svc` controls services over SVCCTL (admin on the target): `svc start` /
+`svc stop <name>` waits for the state transition, `svc config <name>`
+prints start type and state, and `svc config <name> disabled|demand|auto`
+changes the start type. `tasks` lists scheduled tasks (path, state,
+enabled) over the same TSCH pipe `exec` uses — with the same admin
+requirement and the same Samba denial; `taskshow <path>` prints the
+task's XML, `taskrun <path>` runs it, `taskdel <path>` deletes it.
+
+`time` prints the server's clock, zone offset, and uptime from srvsvc's
+NetrRemoteTOD (Samba reports tod_msecs=0, so lab uptime reads 0s).
+`procs` lists processes without WMI: the Process performance-counter
+family is read over the session's winreg pipe — the same channel
+Sysinternals PsList uses — with counter indexes resolved from the
+target's title database (the kernel PerfOS registration constants as
+fallback). Read-only and world-readable; any authenticated session works.
+`enumpipes` lists named pipes as the union of three sources on the same
+session: the IPC$ NPFS listing, an endpoint-mapper lookup, and
+CREATE-probes of well-known names — the probes are load-bearing on
+modern Windows, where the RPC runtime answers `\pipe\samr` & co. without
+materializing them in either listing. Each pipe is categorized against a
+built-in database (admin/file/system/database/...), and a probe answered
+with access denied is reported as such — the pipe exists and rejects
+your credentials, which is itself recon signal.
+
+Registry writes ride the winreg pipe too: `reg set <key> <value> <type>
+<data>` (types REG_SZ, REG_EXPAND_SZ, REG_BINARY as hex, REG_DWORD,
+REG_QWORD, REG_MULTI_SZ as `a|b|c`), `reg delvalue <key> <value>`,
+`reg createkey <key>` (creates missing parents), `reg delkey <key>`
+(must have no subkeys), and `reg search <root> <pattern> [maxdepth]
+[limit]` over key and value names. `portfwd` edits the PortProxy v4tov4
+relay store (`HKLM\SYSTEM\CurrentControlSet\Services\PortProxy\v4tov4\
+tcp`) in exactly the layout `netsh interface portproxy` writes:
+`portfwd list`, `portfwd add <listen host:port> <connect host:port>`,
+`portfwd remove <listen>`, `portfwd clear`. Rules activate after an
+iphlpsvc restart or reboot and persist until removed — the change
+tracker (below) keeps them visible. Any winreg consumer lazily starts
+the target's RemoteRegistry service if it is demand-stopped and restores
+its prior state when the shell exits.
+
+`find` walks the selected share recursively (start path defaults to the
+current remote directory) with filters: `-name <glob>` or `-regex <re>`
+against the base name (`-i` folds case), `-size [+|-|=]N<B|KB|MB|GB>`,
+`-newer N` / `-older N` (mtime in days), `-type file|dir`, `-maxdepth N`,
+`-limit N`, `-timeout 60s`. Unreadable subdirectories (System Volume
+Information, junctions) are skipped, and a timeout returns the partial
+results with a warning. `download <remote> <local>` pulls a file in
+64 KiB chunks with resumable state under `~/.anvil/downloads/`:
+`--resume` continues an interrupted pull (the remote size and mtime must
+still match), `--restart` discards saved state.
+
+`eventlog list` shows the target's event logs and `eventlog query <log>
+[--minutes N] [--id N] [--type t] [--source s] [--contains x] [--limit
+n]` reads them (wevtutil's XML parsed locally). wevtutil runs over the
+exec channel, so `eventlog` inherits `exec`'s admin requirement — and
+its Samba denial.
+
+The shell tracks every remote mutation it attempts — file ops (`put`,
+`rm`, `mkdir`, `rmdir`, `rename`), the exec family, registry writes,
+`svc`/`tasks`/`portfwd`, and the AD write primitives — with
+success/failure. `changes` prints the audit table, `changes --save`
+writes it as JSON under `~/.anvil/logs/changes/`, and a summary prints
+when the shell exits. `ping` probes session liveness (a srvsvc share
+enum; SMB2 has no echo op) and `reconnect` re-dials with the original
+connect parameters, re-attaching the selected share. After five idle
+minutes the next command pings first — the check is piggybacked on
+command dispatch, so the connection is never touched concurrently. `!
+<cmd>` runs a local command; `!<n>` re-runs history entry n.
+
 | flag | short | default | meaning |
 |---|---|---|---|
 | `--host` | | (required) | target IP or hostname |
@@ -349,6 +428,7 @@ Win32_Service`).
 | `--target-ip` | | | connect via this IP while keeping `--host` as the SPN name |
 | `--dc-ip` | | | KDC address override for kerberos |
 | `--dc-host` | | | DC hostname override for kerberos |
+| `--sync-clock` | | | measure NTP offset vs the DC and stamp kerberos authenticators with server time (with `-k`) |
 
 No credentials at all attempts a null session. Windows refuses anonymous
 SMB session setup outright (themed error, non-zero exit); Samba's lab DC
@@ -372,6 +452,16 @@ anvil connect --host dc01.lab.local --target-ip 10.0.0.5 -k -u alice -d LAB.LOCA
 Kerberos sessions negotiate SMB 3.0.2 (the smb2 library's 3.1.1 preauth
 hash mishandles the kerberos immediate-auth leg — pinning keeps signing
 correct on all servers).
+
+A skewed client clock fails the KDC's and the service's ±5-minute
+authenticator checks. `--sync-clock` (with `-k`) measures the offset over
+NTP against the DC (`--dc-ip` when set, else `--host`) before connecting,
+prints it, and stamps authenticators with server time; reply-verification
+tolerance is widened past the measured offset so valid KDC replies still
+check out. It covers ccache flows (golden/silver tickets — the case skew
+actually breaks); password-based `-k` builds its AS exchange inside the
+library, which has no clock hook, so that path declines to stock
+behavior.
 
 Examples:
 

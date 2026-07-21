@@ -2,6 +2,74 @@
 
 ## Unreleased
 
+- **download cwd fix**: `download` resolved relative remote paths against
+  the share root instead of the session's current directory — a `cd`
+  followed by `download file.txt` missed the file. It now joins the
+  client cwd exactly like `ls`/`get`/`find` (found during live Server
+  2022 verification; e2e regression added: `cd docs` + `download
+  note.txt`).
+- **Service & task management**: `svc <start|stop|config> <name>
+  [disabled|demand|auto]` over SVCCTL (start/stop wait for the state
+  transition; bare `config` reads start type + state) and `tasks` /
+  `taskshow <path>` / `taskrun <path>` / `taskdel <path>` over the TSCH
+  pipe `exec` uses — same admin requirement, same themed denial on Samba.
+- **Registry writes + search**: `reg set <key> <value> <type> <data>`
+  (REG_SZ, REG_EXPAND_SZ, REG_BINARY as hex, REG_DWORD, REG_QWORD,
+  REG_MULTI_SZ as `a|b|c`), `reg delvalue`, `reg createkey` (missing
+  parents created), `reg delkey`, and `reg search <root> <pattern>
+  [maxdepth] [limit]` — all over the session's winreg pipe.
+- **Recon without new channels**: `time` (srvsvc NetrRemoteTOD — clock,
+  zone, uptime; Samba reports tod_msecs=0 so lab uptime reads 0s),
+  `procs` (process list from the registry performance hives — the
+  Sysinternals PsList channel, no WMI, world-readable; counter indexes
+  resolved from the target's title database with the kernel PerfOS
+  registration constants as fallback), and `enumpipes` (union of the IPC$
+  NPFS listing, an endpoint-mapper lookup, and CREATE-probes of
+  well-known names — load-bearing on Server 2022, where the RPC runtime
+  answers `\pipe\samr` & co. without materializing them in either
+  listing; categorized against a built-in known-pipe database, and a pipe
+  answering access denied is reported as existing-but-denied recon
+  signal).
+- **Resumable downloads**: `download <remote> <local> [--resume]
+  [--restart]` — 64 KiB chunks (a single SMB2 credit), progress state
+  under `~/.anvil/downloads/`; resume validates the remote size and
+  mtime before continuing.
+- **Share search**: `find [start] [-name glob | -regex re] [-i]
+  [-size [+|-|=]N<B|KB|MB|GB>] [-newer N] [-older N] [-type file|dir]
+  [-maxdepth N] [-limit N] [-timeout d]` — recursive walk of the selected
+  share over the existing session (one tree connect, RTT-bound);
+  unreadable subdirectories are skipped and a timeout returns partial
+  results with a warning.
+- **Event logs**: `eventlog list` / `eventlog query <log> [--minutes N]
+  [--id N] [--type t] [--source s] [--contains x] [--limit n]` — wevtutil
+  runs over the exec channel and the XML is parsed locally, so it
+  inherits `exec`'s admin requirement and its Samba denial.
+- **PortProxy relay**: `portfwd list|add <listen> <connect>|remove
+  <listen>|clear` edits the v4tov4 PortProxy store
+  (`HKLM\SYSTEM\CurrentControlSet\Services\PortProxy\v4tov4\tcp`) in the
+  exact layout `netsh interface portproxy` writes; rules activate after
+  an iphlpsvc restart or reboot and persist until removed.
+- **Session resilience & audit**: `ping` (liveness probe — a srvsvc
+  share enum, SMB2 having no echo op), `reconnect` (re-dial with the
+  stored connect parameters, re-attaching the selected share), an idle
+  keepalive that pings before the first command after five quiet minutes
+  (piggybacked on dispatch so the wire is never touched concurrently),
+  `changes [--save] [--clear]` (write-op audit of every remote mutation
+  attempted — file ops, exec family, registry, svc/tasks/portfwd, AD
+  write primitives — with a summary banner at shell exit and JSON save to
+  `~/.anvil/logs/changes/`), and `! <cmd>` (local shell escape; `!<n>`
+  re-runs history entry n).
+- **`connect --sync-clock`**: with `-k`, measures the NTP offset against
+  the DC before dialing and stamps kerberos authenticators with server
+  time, so a skewed client passes the ±5-minute checks. The gokrb5 fork
+  hardcodes `time.Now()`, so the offset is applied where anvil builds
+  wire timestamps itself (AP-REQ authenticators) and reply verification's
+  Clockskew is widened past the measured offset; ccache flows only —
+  password-based `-k` declines to the stock path (its AS exchange is
+  library-internal and unreachable).
+- **RemoteRegistry handling**: winreg consumers (procs, portfwd, reg,
+  hive dumps) lazily start the target's RemoteRegistry service when it is
+  demand-stopped and restore its prior state at shell exit.
 - **Execution diversity**: four ways to run a command on a target, sharing
   one readback + verified-cleanup pattern — `exec` (TSCH), `psexec`
   (temporary Windows service via SVCCTL, runs as SYSTEM; batch-file

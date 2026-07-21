@@ -196,9 +196,9 @@ inheritance, object type), `-p <user> -grant <rights>` adds an ACE, and
 classic escalation primitives (`RightsPresetNames`: dcsync, fullcontrol,
 genericall, resetpassword, writedacl, writemembers, writeowner). Only the
 touched SD portion is written, and Server 2022's DACL canonicalization
-(GENERIC_ALL stored as FULL_CONTROL) is accounted for. `owneredit
-<target> [-set <user>]` reads or sets the object owner (write needs
-WriteOwner).
+(GENERIC_ALL stored as FULL_CONTROL) is accounted for.
+`owneredit <target> [-set <user>]` reads or sets the object owner (write
+needs WriteOwner).
 
 ### The RBCD chain
 
@@ -429,12 +429,13 @@ built-in database (admin/file/system/database/...), and a probe answered
 with access denied is reported as such — the pipe exists and rejects
 your credentials, which is itself recon signal.
 
-Registry writes ride the winreg pipe too: `reg set <key> <value> <type>
-<data>` (types REG_SZ, REG_EXPAND_SZ, REG_BINARY as hex, REG_DWORD,
-REG_QWORD, REG_MULTI_SZ as `a|b|c`), `reg delvalue <key> <value>`,
-`reg createkey <key>` (creates missing parents), `reg delkey <key>`
-(must have no subkeys), and `reg search <root> <pattern> [maxdepth]
-[limit]` over key and value names. `portfwd` edits the PortProxy v4tov4
+Registry writes ride the winreg pipe too:
+`reg set <key> <value> <type> <data>` (types REG_SZ, REG_EXPAND_SZ,
+REG_BINARY as hex, REG_DWORD, REG_QWORD, REG_MULTI_SZ as `a|b|c`),
+`reg delvalue <key> <value>`, `reg createkey <key>` (creates missing
+parents), `reg delkey <key>` (must have no subkeys), and
+`reg search <root> <pattern> [maxdepth] [limit]` over key and value
+names. `portfwd` edits the PortProxy v4tov4
 relay store (`HKLM\SYSTEM\CurrentControlSet\Services\PortProxy\v4tov4\
 tcp`) in exactly the layout `netsh interface portproxy` writes:
 `portfwd list`, `portfwd add <listen host:port> <connect host:port>`,
@@ -455,9 +456,10 @@ results with a warning. `download <remote> <local>` pulls a file in
 `--resume` continues an interrupted pull (the remote size and mtime must
 still match), `--restart` discards saved state.
 
-`eventlog list` shows the target's event logs and `eventlog query <log>
-[--minutes N] [--id N] [--type t] [--source s] [--contains x] [--limit
-n]` reads them (wevtutil's XML parsed locally). wevtutil runs over the
+`eventlog list` shows the target's event logs; `eventlog query <log>`
+takes filters (`--minutes N`, `--id N`, `--type t`, `--source s`,
+`--contains x`, `--limit n`) and reads them (wevtutil's XML parsed
+locally). wevtutil runs over the
 exec channel, so `eventlog` inherits `exec`'s admin requirement — and
 its Samba denial.
 
@@ -470,8 +472,8 @@ when the shell exits. `ping` probes session liveness (a srvsvc share
 enum; SMB2 has no echo op) and `reconnect` re-dials with the original
 connect parameters, re-attaching the selected share. After five idle
 minutes the next command pings first — the check is piggybacked on
-command dispatch, so the connection is never touched concurrently. `!
-<cmd>` runs a local command; `!<n>` re-runs history entry n.
+command dispatch, so the connection is never touched concurrently.
+`! <cmd>` runs a local command; `!<n>` re-runs history entry n.
 
 | flag | short | default | meaning |
 |---|---|---|---|

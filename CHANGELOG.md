@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **certreq**: certificate enrollment from the connect shell — `certreq
+  <template> [-cn <name>] [-san <upn>] [-ca <host\CA-Name>] [-out
+  <file.pem>]` requests a certificate from the domain's enterprise CA
+  over MS-ICPR on the session's cert pipe (the CA is discovered via LDAP
+  enrollment services; `-ca` overrides). The template is carried per
+  MS-WCCE as both a CSR extension and the request's
+  `CertificateTemplate` attribute; paired with `adenum adcs` (which flags
+  ENROLLEE_SUPPLIES_SUBJECT), `-san <upn>` works the ESC1
+  enrollee-supplied-subject path. Output is PEM (issued cert + generated
+  key; one openssl line converts to PKCS#12). Samba's CA-less denial is
+  asserted in e2e; issuance (baseline User cert + ESC1 SAN cert against
+  HACKERBLUEPRINT-CA) is verified manually against the Windows Server
+  2022 CA.
+
 ## 0.6.0 — operator batch and portfwd activation
 
 Day-to-day operating additions across the board: kerberos account

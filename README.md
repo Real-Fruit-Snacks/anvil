@@ -17,7 +17,9 @@ construction is adapted from gopacket's `tools/DumpNTLMInfo` (Apache-2.0).
   LDAP signing and channel-binding posture; kerberos realm probe;
   null-session share check; TLS certificate harvest; AD CS web-enrollment
   (ESC8) detection. Probes are individually selectable (`--only`/`--skip`)
-  and output is available as JSON.
+  and output is available as JSON. The shell continues the AD CS story:
+  `adenum adcs` enumerates templates (ESC1 flagged) and `certreq` enrolls
+  over MS-ICPR, enrollee-supplied SANs included.
 - **Authenticated SMB shell** (`anvil connect`) — one persistent session for
   file management (including filtered search and resumable downloads),
   enumeration (users, groups, sessions, services, processes, named pipes,
@@ -158,7 +160,7 @@ category:
 - **AD writes**: `addcomputer <name> [-pass x]` / `delcomputer <name>`,
   `changepasswd <user> <new> [old]`, `sampasswd <user> <new> <old>`,
   `samadd` / `samdel <group> <user>`, `rbcd get|set|clear`, `dacledit`,
-  `owneredit`
+  `owneredit`, `certreq <template> [-san <upn>]` (certificate enrollment)
 - **Ticket attacks**: `badsuccessor [enum|keys <dmsa$>]`,
   `raisechild <child-krbtgt-hash> [out]`
 - **Session**: `loot [dir]` (loot directory for `--out` files),
@@ -271,6 +273,28 @@ session untouched. Bare `adenum` defaults to `users`. Four modes:
   (msDS-AllowedToActOnBehalfOfOtherIdentity)
 - `laps` — hosts with a readable LAPS-managed local admin password
   (ms-Mcs-AdmPwd / msLAPS-Password) and its expiry
+
+`certreq <template> [-cn <name>] [-san <upn>] [-ca <host\CA-Name>]`
+`[-out <file.pem>]` requests a certificate from the domain's enterprise CA
+over MS-ICPR — the enrollment RPC interface on the session's `\pipe\cert`
+named pipe, so the only extra channel is one transient LDAP lookup
+(announced) for CA discovery: with no `-ca`, the CA is found in the
+configuration NC's enrollment services (`pKIEnrollmentService` objects);
+`-ca` pins a specific `host\CA-Name`. The template is named twice per
+MS-WCCE — in the generated CSR's certificate-template extension and in
+the request's `CertificateTemplate` attribute. The ESC1 pairing:
+`adenum adcs` flags templates carrying ENROLLEE_SUPPLIES_SUBJECT (the
+ESC1 condition), and `certreq <template> -san victim@corp.local` exploits
+exactly that — the CA issues a certificate whose SAN names any principal
+the enrollee chooses, announced by the
+`SAN: <upn> (enrollee-supplied subject)` line before `issued:` prints.
+`-out` receives the issued certificate plus its freshly generated private
+key as PEM — no PKCS#12; convert afterwards with
+`openssl pkcs12 -export -out user.pfx -inkey key.pem -in cert.pem`. On a
+server with no enrollment pipe (the Samba lab) the open fails with
+`error: no certificate enrollment on this server (no cert pipe)` and the
+session survives; issuance itself (baseline User cert, ESC1 SAN cert) is
+verified manually against the Windows Server 2022 CA.
 
 `lookupsid [startRID] [endRID]` brute-forces account names by RID over the
 session's lsarpc pipe (MS-LSAT LsarLookupSids): resolves the domain SID,

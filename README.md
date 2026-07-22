@@ -675,6 +675,25 @@ round-tripped ccache remains fully usable with `connect -k`. Conventions
 match impacket's ticketConverter (unencrypted KRB-CRED, auth time carried
 by start time).
 
+### `anvil relay`
+
+```
+anvil relay --ca <CA-NAME> --target <ca-host> [--template t] [--alt-name upn] [--smb-port 445] [--rpc]
+```
+
+An NTLM-relay listener that turns a coerced machine-account
+authentication into an AD CS certificate (ESC8). gopacket's relay
+engine listens for the inbound connection and relays it to the CA's
+ICPR endpoint; the issued cert lands as a PFX in the loot directory
+(default `~/.anvil/loot/relay/`) and is converted to the PEM layout
+`gettgt --cert` reads. The operator's chain: relay here, then
+`coerce printerbug <this-ip> 445` from a `connect` shell — the DC's
+machine account calls back, the relayed auth requests a Machine cert,
+and `gettgt --cert <pem> -d <domain>` completes it. The SMB listener
+needs `:445` free on the relay box (the Windows SMB service must be
+stopped, or run the relay from Linux). The command exits after the
+first capture or `--wait` (default 10m).
+
 ### `anvil userenum` / `anvil spray`
 
 ```

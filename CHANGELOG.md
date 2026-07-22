@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **`anvil relay`**: NTLM-relay to AD CS (ESC8). gopacket's relay
+  engine listens for a coerced machine-account authentication and
+  relays it to the CA's ICPR endpoint; the issued cert lands as a PFX
+  in the loot dir and is converted to the PEM layout `gettgt --cert`
+  reads (via go-pkcs12, now a direct dependency). Chain:
+  `relay --ca <CA-NAME> --target <ca-host>` here, `coerce printerbug
+  <this-ip> 445` from a connect shell, `gettgt --cert` to finish. The
+  SMB listener needs `:445` free on the relay box.
 - **Coercion triggers**: `coerce <method> <listen-ip> <port>` in the
   connect shell fires a machine-account coercion and proves it with a
   built-in callback listener (10s). Methods: `printerbug` (MS-RPRN

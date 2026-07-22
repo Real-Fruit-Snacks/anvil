@@ -119,6 +119,25 @@ type ADCSInfo struct {
 	AuthSchemes   []string `json:"authSchemes,omitempty"`
 }
 
+// TDSInfo is the MSSQL prelogin handshake result (port 1433): the server
+// version from the prelogin response token stream and whether encryption
+// is required. Unauthenticated by design (TDS prelogin precedes auth).
+type TDSInfo struct {
+	Probed  bool   `json:"probed"`
+	Error   string `json:"error,omitempty"`
+	Version string `json:"version,omitempty"`
+	Encrypt string `json:"encrypt,omitempty"` // "required", "off", "not supported"
+}
+
+// RDPInfo is the RDP security-negotiation result (port 3389): whether the
+// server demands NLA (CredSSP) — the pre-auth hardening flag — from the
+// X.224 negotiation response's selected protocol.
+type RDPInfo struct {
+	Probed bool   `json:"probed"`
+	Error  string `json:"error,omitempty"`
+	NLA    *bool  `json:"nla,omitempty"` // true = CredSSP/NLA enforced
+}
+
 // TargetProfile is the assembled result of a scan run.
 type TargetProfile struct {
 	Target      string           `json:"target"`
@@ -131,5 +150,7 @@ type TargetProfile struct {
 	NullSession *NullSessionInfo `json:"nullSession,omitempty"`
 	TLS         *TLSInfo         `json:"tls,omitempty"`
 	ADCS        *ADCSInfo        `json:"adcs,omitempty"`
+	TDS         *TDSInfo         `json:"tds,omitempty"`
+	RDP         *RDPInfo         `json:"rdp,omitempty"`
 	Hints       []string         `json:"hints,omitempty"`
 }

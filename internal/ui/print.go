@@ -47,6 +47,14 @@ func PrintProfile(p *scan.TargetProfile) {
 		fmt.Println()
 		printADCS(p.ADCS)
 	}
+	if p.TDS != nil {
+		fmt.Println()
+		printTDS(p.TDS)
+	}
+	if p.RDP != nil {
+		fmt.Println()
+		printRDP(p.RDP)
+	}
 	if len(p.Hints) > 0 {
 		fmt.Println()
 		printHints(p.Hints)
@@ -191,6 +199,39 @@ func printHints(hints []string) {
 			line = Warm.Sprint(h)
 		}
 		fmt.Printf("  %s\n", line)
+	}
+}
+
+func printTDS(t *scan.TDSInfo) {
+	Muted.Println("MSSQL")
+	if t.Error != "" {
+		probeError(t.Error)
+		return
+	}
+	if t.Version != "" {
+		kv("version", t.Version, nil)
+	}
+	if t.Encrypt != "" {
+		var c *color.Color
+		if t.Encrypt == "required" {
+			c = Accent
+		}
+		kv("encryption", t.Encrypt, c)
+	}
+}
+
+func printRDP(r *scan.RDPInfo) {
+	Muted.Println("RDP")
+	if r.Error != "" {
+		probeError(r.Error)
+		return
+	}
+	if r.NLA != nil {
+		if *r.NLA {
+			kv("nla", "enforced (CredSSP)", Accent)
+		} else {
+			kv("nla", "not enforced", Warm)
+		}
 	}
 }
 

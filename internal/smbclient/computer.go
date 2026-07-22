@@ -100,10 +100,25 @@ func (s *Session) ldapComputerAttrs(name, password string) error {
 	return nil
 }
 
+// ldapTarget builds the session.Target for transient LDAP channels: --host
+// as the identity name, --target-ip as the dial address when given.
+// gopacket's Target.Addr() dials IP in preference to Host (pkg/session:
+// "Connection IP if different from Host (e.g. for Kerberos with DNS
+// issues)"), while the Kerberos SPN is still built from Host (pkg/ldap
+// bind.go: "ldap/<host>") — so a Kerberos bind keeps working when only the
+// name resolution was the problem. The SMB session already dials this
+// Host/IP pair (session.go dial()); without it, a DC FQDN that does not
+// resolve on the operator's box fails with "no such host" before any
+// packet leaves. LDAPS cert identity is no obstacle either: pkg/ldap's
+// Connect uses InsecureSkipVerify.
+func (s *Session) ldapTarget(port int) session.Target {
+	return session.Target{Host: s.host, Port: port, IP: s.targetIP}
+}
+
 // openLDAP establishes one transient LDAP channel with the session's
 // credentials (UPN simple bind, Login() fallback — the roast pattern).
 func (s *Session) openLDAP() (*ldap.Client, func(), error) {
-	cl := ldap.NewClient(session.Target{Host: s.host}, s.creds)
+	cl := ldap.NewClient(s.ldapTarget(0), s.creds)
 	if err := cl.Connect(false); err != nil {
 		cl.Close()
 		return nil, nil, fmt.Errorf("ldap connect: %v", err)
@@ -120,7 +135,7 @@ func (s *Session) openLDAP() (*ldap.Client, func(), error) {
 
 // openLDAPS is openLDAP over TLS (port 636) — needed for password writes.
 func (s *Session) openLDAPS() (*ldap.Client, func(), error) {
-	cl := ldap.NewClient(session.Target{Host: s.host, Port: 636}, s.creds)
+	cl := ldap.NewClient(s.ldapTarget(636), s.creds)
 	if err := cl.Connect(true); err != nil {
 		cl.Close()
 		return nil, nil, fmt.Errorf("ldaps connect: %v", err)

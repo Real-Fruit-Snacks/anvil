@@ -112,6 +112,26 @@ func Run(target string, opts Options) *TargetProfile {
 			mu.Unlock()
 		}()
 	}
+	if open(1433) && opts.enabled(ProbeTDS) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			info := probeTDS(target, 1433, opts.Timeout)
+			mu.Lock()
+			profile.TDS = info
+			mu.Unlock()
+		}()
+	}
+	if open(3389) && opts.enabled(ProbeRDP) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			info := probeRDP(target, 3389, opts.Timeout)
+			mu.Lock()
+			profile.RDP = info
+			mu.Unlock()
+		}()
+	}
 	wg.Wait()
 
 	if open(88) && opts.enabled(ProbeKerberos) {

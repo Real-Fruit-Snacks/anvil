@@ -100,13 +100,16 @@ TLS certificate harvest (636/3389/5986 — subject CN, issuer, SANs, expiry;
 certs are captured, not trust-validated) and an AD CS web-enrollment check
 (an unauthenticated GET of `/certsrv/` — a 401 challenging with NTLM marks
 the ESC8 relay target; an anonymous 200 is called out too). 80/443 joined
-the default port set for this.
+the default port set for this. Two more round out the service intel: an
+MSSQL prelogin probe (1433 — server version from the TDS token stream and
+whether encryption is required) and an RDP NLA check (3389 — X.224
+negotiation shows whether CredSSP is enforced).
 
 Flags:
 
 - `--ports 53,88,445` — comma-separated TCP ports (default: AD port set)
 - `--only smb,ldap` — run only these probes (`smb`, `rpc`, `ldap`, `krb`,
-  `nullsession`, `tls`, `adcs`)
+  `nullsession`, `tls`, `adcs`, `tds`, `rdp`)
 - `--skip nullsession,krb` — run all probes except these (mutually
   exclusive with `--only`)
 - `--timeout 3s` — per-connection timeout
@@ -162,7 +165,9 @@ category:
   `samadd` / `samdel <group> <user>`, `rbcd get|set|clear`, `dacledit`,
   `owneredit`, `certreq <template> [-san <upn>]` (certificate enrollment)
 - **Ticket attacks**: `badsuccessor [enum|keys <dmsa$>]`,
-  `raisechild <child-krbtgt-hash> [out]`
+  `raisechild <child-krbtgt-hash> [out]`, `certreq <template> [-san <upn>]`
+  (certificate enrollment), `coerce <method> <ip> <port>` (machine-account
+  coercion with a callback listener)
 - **Session**: `loot [dir]` (loot directory for `--out` files),
   `changes [--save] [--clear]` (write-op audit trail),
   `ping`, `reconnect`, `! <cmd>` (local shell; `!<n>` re-runs entry n),
@@ -295,6 +300,22 @@ server with no enrollment pipe (the Samba lab) the open fails with
 `error: no certificate enrollment on this server (no cert pipe)` and the
 session survives; issuance itself (baseline User cert, ESC1 SAN cert) is
 verified manually against the Windows Server 2022 CA.
+
+`coerce <method> <listen-ip> <port>` fires a machine-account coercion
+trigger and proves it with a built-in callback listener: anvil binds
+`:port`, delivers the RPC, and reports whether the target's machine
+account connected back within 10 seconds. Methods: `printerbug`
+(MS-RPRN RpcRemoteFindFirstPrinterChangeNotificationEx — works as any
+authenticated user on stock Windows), `petitpotam` (MS-EFSR
+EfsRpcOpenFileRaw — patched to require admin on current Windows),
+`shadowcoerce` (MS-FSRVP IsPathSupported — needs the File Server VSS
+Agent service, disabled by default on many servers), and `dfscoerce`
+(MS-DFSNM NetrDfsAddStdRoot + cleanup — admin-restricted). Each
+surfaces its own themed denial when the server refuses. Note the
+callback always lands on the listener's SMB port (445), so a Windows
+operator box sees it in its own SMB server rather than the anvil
+listener; a loopback listener on the target (127.0.0.1) proves the
+callback in the target's own session list — `DC01$ from 127.0.0.1`.
 
 `lookupsid [startRID] [endRID]` brute-forces account names by RID over the
 session's lsarpc pipe (MS-LSAT LsarLookupSids): resolves the domain SID,

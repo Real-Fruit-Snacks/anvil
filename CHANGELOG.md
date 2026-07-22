@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- **Coercion triggers**: `coerce <method> <listen-ip> <port>` in the
+  connect shell fires a machine-account coercion and proves it with a
+  built-in callback listener (10s). Methods: `printerbug` (MS-RPRN
+  RpcRemoteFindFirstPrinterChangeNotificationEx, opnum 65 — any
+  authenticated user on stock Windows), `petitpotam` (MS-EFSR
+  EfsRpcOpenFileRaw, lsarpc-pipe first with efsrpc fallback),
+  `shadowcoerce` (MS-FSRVP IsPathSupported), `dfscoerce` (MS-DFSNM
+  NetrDfsAddStdRoot + NetrDfsRemoveStdRoot cleanup). NDR is hand-rolled
+  per protocol and byte-verified against impacket/the MS specs; every
+  refusal is themed (patched, disabled service, needs admin). Live on
+  Server 2022: printerbug verified (DC01$ connects back to a loopback
+  listener, seen in the DC's own session list), petitpotam/
+  shadowcoerce/dfscoerce correctly report their patched/absent states.
+- **scan service intel**: MSSQL prelogin probe (1433 — server version
+  from the TDS token stream, encryption requirement; unauthenticated by
+  design) and RDP NLA check (3389 — X.224 negotiation shows CredSSP
+  enforcement). Both ride probe selection as `tds` and `rdp`.
+- **dpapi machine creds**: machine-store Credential Manager blobs
+  (systemprofile/ServiceProfiles) no longer report "decrypted but
+  credential unparseable" — the parser now walks all six length-prefixed
+  fields (machine creds populate targetAlias/description/unknown that UI
+  creds leave empty) instead of the user-cred shortcut layout.
+- **whoami target-ip**: the LDAP channel for whoami (and addcomputer
+  paths) now dials `--target-ip` when given instead of the `--host`
+  name — fixes "no such host" against targets whose FQDN doesn't
+  resolve on the operator's box.
+
 ## 0.7.0 — the AD CS attack chain
 
 The AD Certificate Services story runs end to end in-tool: detect

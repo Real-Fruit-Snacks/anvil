@@ -58,4 +58,5 @@ func init() {
 	rootCmd.AddCommand(newSamdumpCmd())
 	rootCmd.AddCommand(newLsadumpCmd())
 	rootCmd.AddCommand(newNtdsdumpCmd())
+	rootCmd.AddCommand(newRelayCmd())
 }

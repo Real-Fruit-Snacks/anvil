@@ -13,6 +13,7 @@ require (
 	github.com/rs/zerolog v1.32.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/term v0.43.0
+	software.sslmate.com/src/go-pkcs12 v0.7.0
 )
 
 require (

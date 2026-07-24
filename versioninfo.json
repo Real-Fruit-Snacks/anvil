@@ -2,13 +2,13 @@
 	"FixedFileInfo": {
 		"FileVersion": {
 			"Major": 0,
-			"Minor": 7,
+			"Minor": 8,
 			"Patch": 0,
 			"Build": 0
 		},
 		"ProductVersion": {
 			"Major": 0,
-			"Minor": 7,
+			"Minor": 8,
 			"Patch": 0,
 			"Build": 0
 		},
@@ -22,14 +22,14 @@
 		"Comments": "For authorized security testing only.",
 		"CompanyName": "",
 		"FileDescription": "Active Directory recon tool built on gopacket",
-		"FileVersion": "0.7.0.0",
+		"FileVersion": "0.8.0.0",
 		"InternalName": "anvil",
 		"LegalCopyright": "Built on github.com/mandiant/gopacket (Apache-2.0); SMB packet code adapted from tools/DumpNTLMInfo",
 		"LegalTrademarks": "",
 		"OriginalFilename": "anvil.exe",
 		"PrivateBuild": "",
 		"ProductName": "anvil",
-		"ProductVersion": "0.7.0.0",
+		"ProductVersion": "0.8.0.0",
 		"SpecialBuild": ""
 	},
 	"VarFileInfo": {

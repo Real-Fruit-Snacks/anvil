@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.8.0 — coercion and the ESC8 relay
+
+anvil can now force the target's machine account to authenticate to the
+operator (`coerce`) and turn that authentication into a CA-issued
+certificate (`relay`), closing the ESC8 loop with the PKINIT path from
+0.7.0 — plus scan service intel (MSSQL/RDP) and a round of parser fixes.
+
 - **`anvil relay`**: NTLM-relay to AD CS (ESC8). gopacket's relay
   engine listens for a coerced machine-account authentication and
   relays it to the CA's ICPR endpoint; the issued cert lands as a PFX
